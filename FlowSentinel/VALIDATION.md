@@ -68,3 +68,53 @@ node test/portable-smoke.js
 - 产物：`dist/FlowSentinel-1.2.0-win-x64.exe`，102933342 字节。SHA-256：`885027af06a9202d57a2dd4d394bafce1fe2e2d696628d8df0b9087b6727e7da`，校验文件同目录。
 
 验证边界：未连接用户实际捕鱼游戏、未验证 64 实例性能；本地并发为 2 实例/上下文。相同图案无法判断玩家归属，动画背景、旋转、缩放和受污染 Canvas 不保证定位。旧流程必须重新录制才有点击图像。最终可信图和检查点依旧是局部位置容差匹配。
+
+## 1.2.1 大厅点击截图修复验收（2026-10-23）
+
+- 只读检查“自动化 ParadiseFishing”：68–71 步没有 visual 且标为不可用，72–81 步均有 visual；故障证据 PNG 中大厅按钮可见。未运行用户真实游戏流程，也未改写原流程。
+- `npm test`：12/12 通过，包含点击前/后帧选择与资源释放。
+- `node test/capture-e2e.js`：透明 Canvas 叠加 CSS 图案、跨域污染 Canvas、静态 WebGL 无动画回调、iframe 坐标、点击后立即换图、低特征图片显示并提示，全部通过。
+- `node test/visual-e2e.js`：位移、并发隔离、WebGL、缺失与歧义阻断通过。
+- `npm run test:e2e` 与 `node test/checkpoint-e2e.js`：表单、拖动、双实例恢复、等待和停止通过。
+- 源码与打包版 `ui-smoke.js` 均通过；`portable-smoke.js` 通过最终单文件 EXE 的启动、录制、停止与保存。
+- 核对 app.asar 内 capture.js、recorder-script.js、engine.js 与源码字节一致，包内版本 1.2.1。
+- 构建命令：`npm run dist -- --config.electronDist=node_modules/electron/dist`。
+- 产物：`dist/FlowSentinel-1.2.1-win-x64.exe`（102934272 字节），SHA-256：`07617ef349d04b49ecddfb13df83751117551e27d1c82401fefd21caa14b38e4`。
+
+边界：保存的旧错误没有区分 Canvas 读回失败的具体浏览器原因；上述回归覆盖可导致该问题的渲染场景。未声称已实测真实游戏。旧录制缺失的截图需要重录，截图匹配阈值和重复目标阻断行为未降低。
+
+## 1.2.2 回退原坐标验收（2026-10-23）
+
+- `npm test`：12/12 通过，匹配分类、取消、采集帧选择与存储回归正常。匹配器仍返回定位失败类别，由回放层实施回退策略。
+- `node test/visual-e2e.js`：原位优先、唯一目标重定位、多个/缺失目标回退、旧 visualError 与损坏 PNG 回退、模拟截图异常回退、warn 日志、准确录制落点、后续表单继续、取消不点击均通过。两个隔离浏览器上下文并发验证，包含 iframe、缩放 Canvas 和 WebGL。
+- `node test/checkpoint-e2e.js`：通过，检查点仍等待，超时仍阻断，不受 Canvas 点击回退策略影响。
+- `node test/ui-smoke.js --packaged`：通过打包版界面、图像预览和双实例回放。
+- `node test/portable-smoke.js`：最终单文件 EXE 启动、录制、停止及保存通过。
+- 已核对包内 engine.js、vision.js、ui/app.js 与源码字节一致，版本 1.2.2。
+- 构建：`npm run dist -- --config.electronDist=node_modules/electron/dist`。产物 `dist/FlowSentinel-1.2.2-win-x64.exe`，102932963 字节；SHA-256：`9cd03034fe8d0232f89a964cdb9b519130790762b3fc0c13634bfc8ba27ab180`。
+
+未在真实捕鱼游戏中重跑。原有流程可直接使用新回退策略，不改写用户的录制数据；缺图步骤无法重定位但能按原坐标继续。
+
+## 1.2.3 连续九次加注回归（2026-10-23）
+
+- 只读提取用户指定流程中 Canvas 的坐标、间隔和局部图片；第 68–76 步位置完全一致，模板像素一致率 99.9566%–100%。新同点判定能将九步识别为同一段。没有导出表单步骤或修改原流程。
+- `npm test`：15/15 通过；新增轻微图像变化/不同图像区分、拖动和长按排除、实例/几何/长间隔失效测试。
+- `node test/repeat-e2e.js`：首次重定位成功后立即改变按钮外观，九次独立 down/up 均命中目标，仅首击截图，后八次输出复用日志；不同位置、超时、Canvas 替换及导航后不复用。两个 Runner 实例分别在不同座位完成九次点击，无回退警告。
+- `node test/visual-e2e.js`：原有独立点击定位、未找到/多目标/无效图的原坐标回退、取消测试通过。
+- `node test/checkpoint-e2e.js`：检查点等待、超时和停止通过。
+- 源码与打包版 `ui-smoke.js`、最终 EXE 的 `portable-smoke.js` 均通过。包内 repeat-clicks.js 与 engine.js 和源码字节一致，版本为 1.2.3。
+- 构建：`npm run dist -- --config.electronDist=node_modules/electron/dist`。产物 `dist/FlowSentinel-1.2.3-win-x64.exe`，102935102 字节，SHA-256：`101ae21663c874b7b1b7f3a268d68e9489631679ab57422fa73bacb588ce72eb`。
+
+未在用户真实游戏中执行九次加注，现有日志不能单独证明具体是悬停、按压还是其他视觉状态改变；本次修复并复现验证的是“每步独立匹配且丢弃已确认重定位坐标”导致的连续点击问题。首击若从未匹配，仍按 1.2.2 策略回退，不会假称已确认目标。旧流程无需重新录制。
+
+## 1.2.4 实际可见流程复现与修复（2026-10-23）
+
+- 关闭无头模式运行用户的“自动化 ParadiseFishing”，单实例，在第 76 步后停止。原录制数据未改写，诊断副本不执行后续挂机操作。首次运行在第 63 步游戏加载超时；重试成功进入游戏，复现第 68–76 步全部 VISUAL_NOT_FOUND。
+- 现场截图与录制图比对：加号外围背景及底部滚动条不同，完整图一致率 78.7326%，中央 32×32 为 100%。这说明上一版仅复用首次成功坐标不足以解决当前流程。
+- 修复后再次可见运行，诊断副本检查点超时放宽至 180 秒：第 68 步中央特征通过，第 69–76 步依次复用，8 条复用日志，九连击段无 warn/error。现场证据位于 test-results/live-paradise-fixed；诊断配置副本已清理，未导出表单内容。
+- npm test：16/16 通过；visual-e2e.js、repeat-e2e.js 通过，覆盖外围变化、重定位、多候选、平坦中心、原坐标回退、取消及双实例隔离。
+- 包内 vision.js、engine.js、repeat-clicks.js 与源码一致，包内版本 1.2.4。
+
+验证边界：实际游戏验证为单实例九连击段；不同座位并发由本地双实例夹具验证。第 66 步旧截图不可用、第 67 步无匹配仍按已有策略回退，未宣称整个流程每张图均匹配。检查点等待策略、流程数据和阈值未改动。
+
+打包版 ui-smoke.js --packaged 和最终 portable-smoke.js 均通过。构建命令：npm run dist -- --config.electronDist=node_modules/electron/dist。产物 FlowSentinel-1.2.4-win-x64.exe，102935390 字节；SHA-256：2eb81641ba25f9677d7fc03ed4fb40e6dca967fad31892799bb91914ba149ce7。

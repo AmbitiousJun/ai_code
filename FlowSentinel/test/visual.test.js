@@ -11,15 +11,26 @@ test('原位置优先，远距离偏移保留点击锚点',async()=>{
   assert.deepEqual(await locateClick(screen([[20,20],[300,100]]),visual,original,bounds),{...original,relocated:false});
   assert.deepEqual(await locateClick(screen([[301,101]]),visual,original,bounds),{x:318,y:130,relocated:true});
 });
-test('重复目标、缺失目标和搜索范围外目标均阻断',async()=>{
+test('匹配器报告重复、缺失及范围外目标，由回放层决定回退',async()=>{
   await assert.rejects(locateClick(screen([[120,50],[300,100]]),visual,original,bounds),{code:'VISUAL_AMBIGUOUS'});
   await assert.rejects(locateClick(screen([]),visual,original,bounds),{code:'VISUAL_NOT_FOUND'});
   await assert.rejects(locateClick(screen([[300,100]]),visual,original,{x:0,y:0,width:200,height:220}),{code:'VISUAL_NOT_FOUND'});
 });
 test('搜索可取消',async()=>{const c=new AbortController();const promise=locateClick(screen([]),visual,original,bounds,c.signal);c.abort();await assert.rejects(promise,/STOPPED/);});
-test('空白或透明模板拒绝点击',async()=>{
+test('匹配器拒绝使用空白或透明模板定位',async()=>{
   const blank=new PNG({width:48,height:48});blank.data.fill(255);
   await assert.rejects(locateClick(screen([]),{...visual,image:PNG.sync.write(blank).toString('base64')},original,bounds),{code:'VISUAL_INVALID'});
   blank.data.fill(0);
   await assert.rejects(locateClick(screen([]),{...visual,image:PNG.sync.write(blank).toString('base64')},original,bounds),{code:'VISUAL_INVALID'});
+});
+
+test('动态外围仍可定位中央特征，多候选及平坦中心不误认',async()=>{
+ const changed=PNG.sync.read(screen([[120,50]]));
+ for(let y=0;y<48;y++)for(let x=0;x<48;x++)if(x<8||x>=40||y<8||y>=40){const i=((50+y)*400+120+x)*4;changed.data.fill(255,i,i+4);}
+ assert.deepEqual(await locateClick(PNG.sync.write(changed),visual,original,bounds),{x:137,y:79,relocated:true,region:'center'});
+ PNG.bitblt(changed,changed,120,50,48,48,300,100);
+ await assert.rejects(locateClick(PNG.sync.write(changed),visual,original,bounds),{code:'VISUAL_AMBIGUOUS'});
+ const flat=PNG.sync.read(Buffer.from(visual.image,'base64'));
+ for(let y=8;y<40;y++)for(let x=8;x<40;x++)flat.data.fill(255,(y*48+x)*4,(y*48+x)*4+4);
+ await assert.rejects(locateClick(screen([]),{...visual,image:PNG.sync.write(flat).toString('base64')},original,bounds),{code:'VISUAL_NOT_FOUND'});
 });

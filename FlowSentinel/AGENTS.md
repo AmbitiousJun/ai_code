@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.0**。本文依据 `D:\code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；`AGEMTS.md` 保留同步副本。
+核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.4**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；`AGEMTS.md` 保留同步副本。
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在最终巡检异常时重建实例。
 
@@ -50,7 +50,7 @@ flowchart LR
 下面覆盖当前源码文件；依赖与测试输出目录单独标明为生成内容。
 
 ```text
-D:\code\FlowSentinel\
+D:\ai_code\FlowSentinel\
 ├── AGENTS.md                    本文：技术架构、运行流程与维护导航
 ├── AGEMTS.md                    历史拼写的同步副本
 ├── README.md                    用户操作说明、随机模板、运行与排错方法
@@ -63,6 +63,8 @@ D:\code\FlowSentinel\
 │   ├── main.js                  Electron 主进程入口、IPC 分派和应用协调
 │   ├── preload.js               暴露 window.flowAPI 的最小隔离桥接层
 │   ├── engine.js                录制、回放、检查点、并发巡检和自动恢复核心
+│   ├── repeat-clicks.js         每轮每实例的连续同点点击坐标复用与失效
+│   ├── capture.js               CDP 合成帧缓存与点击前截图兜底
 │   ├── recorder-script.js       注入每个文档的事件录制脚本
 │   ├── store.js                 流程对象的加密文件读写、列举与删除
 │   ├── variables.js             字段标识、模板校验、整字段和片段随机值生成
@@ -74,6 +76,10 @@ D:\code\FlowSentinel\
 │       ├── icon.png             主窗口 PNG 图标
 │       └── icon.ico             Windows 打包图标
 ├── test/
+│   ├── repeat.test.js           连续点击识别、图像相似与隔离规则单元测试
+│   ├── repeat-e2e.js            九次点击、按钮变色、重定位、失效及双实例验收
+│   ├── capture.test.js          点击前帧选择、后帧排除和资源释放测试
+│   ├── capture-e2e.js           透明叠层、跨域污染 Canvas、低特征图像回归
 │   ├── visual.test.js           点击图像原位、位移、歧义、缺失、取消测试
 │   ├── visual-e2e.js            点击前采集、跨域 iframe、不同座位并发回放
 │   ├── core.test.js             图像、配置、取消等待、变量和 Store 单元测试
@@ -84,7 +90,7 @@ D:\code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.0-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.4-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -194,7 +200,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.0 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.4 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -300,7 +306,7 @@ userData/
 在项目目录执行以下 PowerShell 命令。开发需要 Node.js 22.12 或以上及本机 Google Chrome；首次安装需要获取依赖。
 
 ```powershell
-cd D:\code\FlowSentinel
+cd D:\ai_code\FlowSentinel
 npm ci
 npm start
 ```
@@ -308,10 +314,12 @@ npm start
 完整验证与打包顺序：
 
 ```powershell
-cd D:\code\FlowSentinel
+cd D:\ai_code\FlowSentinel
 npm test
 npm run test:e2e
 node test/visual-e2e.js
+node test/capture-e2e.js
+node test/repeat-e2e.js
 node test/checkpoint-e2e.js
 node test/ui-smoke.js
 npm run dist
@@ -352,7 +360,7 @@ node test/portable-smoke.js
 ## 11. 1.2.0 点击图像定位
 
 - 证据：`recorder-script.js/patch()` 在 Canvas pointerdown 捕获阶段同步读取 48×48 CSS 像素，先于游戏事件处理器；按 Canvas 内部像素与显示尺寸比例采样。保存 `visual.image`（PNG Base64）、`offset`（点击锚点）、`width/height`。
-- WebGL：包装 requestAnimationFrame，在回调后最多每 80ms 缓存鼠标附近图像。同步读取为空时，只使用同一 Canvas、同一鼠标位置且小于 250ms 的缓存。跨源污染、透明或缺少图案的截图会保存 `visualError`，界面提示并阻止回放；不悄悄使用空图定位。
+- 1.2.0 曾包装 requestAnimationFrame 缓存鼠标附近图像；1.2.1 已移除此实现，改用下一节的浏览器合成画面兜底。
 - 结论：普通 DOM 点击继续依赖元素选择器；Canvas 短点击先逐像素校验原位置（90%），不通过则在当前页面对应 Canvas 可见范围逐像素搜索。稀疏采样筛选后全像素确认，RGB 通道容差 32；不同候选相距超过 8px 则判歧义。保留点击在图片内的偏移，平移短轨迹。
 - 计算每 8 行主动让出事件循环并检查取消信号；各实例只读取自己的页面截图，不访问全桌面、不共享座位偏移。
 - `engine.js/canvasBox()` 按 iframe 内容起点累加边框与内边距，修正嵌套 iframe Canvas 坐标。CSS transform 旋转/缩放 iframe 不在支持范围。
@@ -360,3 +368,51 @@ node test/portable-smoke.js
 - 修改路径：采集改 recorder-script；匹配改 vision；执行及错误处理改 engine；预览改 main 和 ui；测试见 visual.test.js、visual-e2e.js、ui-smoke.js。
 - 旧流程没有 visual 时保留旧行为；要启用此能力需重新录制。最终可信图、检查点仍使用局部匹配，建议选不受座位影响的固定标志。
 - 限制：不识别座位语义，不支持目标缩放或旋转。相同按钮无法判断所属玩家；原坐标仍匹配时按用户要求优先复用。动画、粒子或变动数字占据截图时可能匹配失败，需要选择稳定图案并设置业务就绪检查点。
+
+## 12. 1.2.1 大厅截图误判修复
+
+### 证据与修复路径
+
+只读检查用户指定的“自动化 ParadiseFishing”：第 68–71 步均有 visualError 且没有 visual，第 72–81 步有 visual。故障证据截图清晰显示大厅按钮，因此旧版“空白或无法读取”将读取失败与真实空白混为一谈。保存的数据不能进一步区分缓冲区清空、跨源污染或图层透明。
+
+新增 `capture.js/ClickCapture`：录制期间每个 Page 建立独立 CDP 会话，订阅 PNG 合成帧，内存最多保留 6 帧。导航清空缓存，DOMContentLoaded 后重启流。停止录制时 detach 并清空。完整页面帧不写入流程或磁盘。
+
+`recorder-script.js` 仍在 pointerdown 前置监听中优先同步读取 Canvas；读回不可用时立即调用 `__flowVisual`，携带点击时间、文档内坐标和当时 Canvas 矩形。`ClickCapture.capture()` 在 await 前锁定时间戳不晚于点击的最新合成帧，再累加 iframe 边框及内边距换算顶层坐标，裁出 48×48 PNG。禁止用点击后截图替代，禁止为获取图像重发业务点击。首帧缺失或截图比例异常会明确提示重新录制。
+
+`send(data, visualPromise)` 将图像结果合并到原有串行录制队列，`__flowFlush` 会等待；拖动不等待或保存视觉模板。新增 visual.source=compositor 标明兜底来源。可读但缺少图案的图片仍显示缩略图，同时设置“图案特征不足”错误，1.2.1 时回放会阻断；1.2.2 改为回退录制原坐标，匹配阈值不降低。
+
+此变更不自动修复旧流程中已经丢失的图片，也不改写用户原流程。若希望缺失截图的步骤也能图像重定位，需要重新录制；1.2.2 可直接按原坐标回放这些步骤。代码维护路径：采集服务 capture.js；绑定/生命周期 engine.js；前端事件和队列 recorder-script.js；测试 capture.test.js、capture-e2e.js、visual-e2e.js。
+
+## 13. 1.2.2 点击回退策略
+
+不新增模块或依赖，回放决策变更位于 `engine.js/replayStep()`。优先级为：原位置图像匹配→原位点击；原位不匹配且画布中找到唯一目标→点击新坐标；未找到或存在多个目标→使用该步骤录制的原坐标。搜索范围仍为当前实例的目标 Canvas 可见部分。匹配器 `locateClick()` 继续用 VISUAL_NOT_FOUND / VISUAL_AMBIGUOUS / VISUAL_INVALID 表达定位结果，回放层捕获这三类结果并回退。
+
+原坐标每步从保存的归一化 points 和当前画布位置重新计算，不覆盖录制数据；独立点击不沿用上一操作的偏移，1.2.3 对连续同点点击增加下一节的有限复用。参考图缺失、旧 visualError、图像格式损坏和截图失败也按原坐标继续。停止信号、页面关闭和真正的鼠标/元素操作错误仍中止执行，不被回退逻辑吞掉。
+
+`onVisual(message, level)` 向 Runner 提供 info/warn 日志，保留实例编号与步骤日志，记录匹配/重定位结果、回退原因及坐标。UI 的截图错误附带“回放时使用录制原坐标”，不再暗示该步骤必然终止流程。中途截图检查点和最终巡检的失败/恢复策略不变。
+
+证据与维护路径：visual.test.js 验证匹配分类；visual-e2e.js 验证并发原位/位移、缺失/重复/损坏/旧 visualError 回退坐标、warn 日志、后续表单继续和取消不点击；ui-smoke.js 与 portable-smoke.js 验证打包交付。
+
+## 14. 1.2.3 连续同点点击
+
+### 证据与行为
+
+只读比对“自动化 ParadiseFishing”第 68–76 步：共 9 个 Canvas 点击、坐标相同、间隔约 264–350ms（首击前为 806ms）。按既有 RGB 容差 32 计算，九张 48×48 图的像素一致率为 99.9566%–100%，因此未发现录制图逐次变形。旧回放每步独立匹配、且不保存首次重定位坐标；按钮的点击后视觉状态变化会使后续失配并退回旧座位。现有日志无法单独确定真实游戏是悬停还是按压状态变化；回归测试通过首次点击后改变图案复现了这一执行缺陷。
+
+新增 `repeat-clicks.js/RepeatClicks`，由 Runner 在每个实例、每轮完整回放创建，作为 replayStep 的可选第五参数。首击仍遵循原位→画布唯一目标→原坐标回退优先级。只有图像匹配通过且鼠标动作成功的短点击会建立本段锚点。后续同点点击复用锚点，无需重新截图，日志输出连续次数、已确认坐标和录制坐标；仍逐个执行 down/up，未合并或省略点击。首次回退坐标不会被当成已确认锚点。
+
+### 识别和清理边界
+
+要求同一 page/frame/selector/button 与同一个 Canvas DOM 元素；画布矩形各项差异小于 0.5px；原点击位置相差不超过 1px；图像相对首击模板一致率至少 98%（RGB 容差 32），图内偏移差不超过 1px；当前保存间隔不超过 1500ms，上次成功动作结束至本次不超过 5000ms。轨迹位移超过 8px、按压超过 1000ms、缺图或 visualError 均不参与。每次比较固定使用本段首击基准，避免累计漂移。
+
+换位置/图案、非 Canvas 步骤、检查点、长间隔、Canvas 替换或矩形变化都会清理；鼠标失败、停止及恢复重建也释放 ElementHandle。回放不改写录制文件，旧流程可直接使用。不同实例及恢复轮次互不共享锚点。
+
+源码维护路径：repeat-clicks.js 管理识别与生命周期；engine.js 负责首次定位、鼠标完成后提交及 Runner 清理；repeat.test.js 验证边界；repeat-e2e.js 验证首次重定位后图案改变仍完成九下，以及双实例不同座位各自九下。
+
+## 15. 1.2.4 点击模板外围干扰修复
+
+可见模式实际复现 ParadiseFishing 第 68–76 步全部首次定位失败：录制模板底部包含滚动条，外围背景也有变化；第 68 步完整图一致率 78.73%，中央 32×32 区域一致率 100%。1.2.3 的复用只在首次匹配成功后启动，因此未解决这个真实首击失配。
+
+vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有完整图无候选时，才检测中央 32×32 的图案特征，按相同 90% 阈值和 RGB 容差 32 重试原位及画布搜索；返回 region=center。完整图的多候选结果不被中央匹配覆盖；中央区域低特征、无候选或多候选仍按原规则回退。engine.js 输出中央特征匹配日志，成功后沿用 RepeatClicks 的逐次点击及隔离逻辑。截图检查点、流程数据格式和模块目录不变，无需重录。
+
+测试维护路径：visual.test.js 新增外围变化、中央重定位、多候选与平坦中心回归；真实运行证据仅位于忽略目录 test-results，不打包用户数据。

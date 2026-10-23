@@ -1,6 +1,8 @@
 const { chromium } = require('playwright-core');
 const { EventEmitter } = require('events');
 const { installRecorder } = require('./recorder-script');
+const {ClickCapture}=require('./capture');
+const {RepeatClicks}=require('./repeat-clicks');
 const { match, crop, locateClick } = require('./vision');
 const {fieldId,generateValues}=require('./variables');
 const fs = require('fs');
@@ -87,6 +89,11 @@ class Recorder extends EventEmitter {
     const browser=await chromium.launch(launchOptions(this.cfg,false));this.browser=browser;
     if(this.stopped){await browser.close();return;}
     this.context=await browser.newContext({viewport:this.flow.viewport,deviceScaleFactor:1,locale:'zh-CN'});
+    this.clickCapture=new ClickCapture(this.context);
+    await this.context.exposeBinding('__flowVisual',async(source,point)=>{
+      if(this.stopped||this.suppress)return {visualError:'截图采集已暂停'};
+      try{return await this.clickCapture.capture(source,point);}catch(error){return {visualError:error.message};}
+    });
     await this.context.exposeBinding('__flowRecord',(source,data)=>{
       if(this.stopped||this.suppress)return;
       const id=this.ids.get(source.page);this.activeId=id;
@@ -98,6 +105,7 @@ class Recorder extends EventEmitter {
     });
     await this.context.addInitScript(installRecorder);
     this.context.on('page',page=>{
+      this.clickCapture.attach(page).catch(()=>{});
       const id=this.pageId++;this.ids.set(page,id);this.pages.set(id,page);this.activeId=id;
       page.on('framenavigated',frame=>{
         if(this.stopped||this.suppress||frame!==page.mainFrame()||!/^https?:/.test(frame.url()))return;
@@ -165,7 +173,7 @@ class Recorder extends EventEmitter {
       await sleep(180);
       await Promise.allSettled([...this.pages.values()].flatMap(p=>p.frames().map(f=>f.evaluate(()=>window.__flowFlush?.()))));
     }
-    this.stopped=true;await this.queue;await this.browser?.close().catch(()=>{});
+    this.stopped=true;await this.queue;await this.clickCapture?.close();await this.browser?.close().catch(()=>{});
   }
 }
 function label(step) {
@@ -186,8 +194,9 @@ async function waitForCheckpoint(page,step,cfg,signal,onSample=()=>{}) {
   const error=new Error('检查点等待超时');error.code='CHECKPOINT_TIMEOUT';error.lastShot=lastShot;error.score=lastScore;throw error;
 }
 
-async function replayStep(page, step, signal, onVisual=()=>{}) {
+async function replayStep(page, step, signal, onVisual=()=>{}, repeats) {
   check(signal);
+  if(step.type!=='canvas')await repeats?.clear();
   if(step.type==='goto') {
     if(page.url()!==step.url) await page.goto(step.url,{waitUntil:'domcontentloaded'});
     return;
@@ -211,23 +220,50 @@ async function replayStep(page, step, signal, onVisual=()=>{}) {
       await el.waitFor({state:'visible'});await el.scrollIntoViewIfNeeded();
       const box=await canvasBox(frame,el);
       const points=step.points;if(!points.length)break;
-      if(step.visualError){const error=new Error(step.visualError);error.code='VISUAL_INVALID';throw error;}
-      let dx=0,dy=0;
-      if(step.visual){
-        const original={x:box.x+points[0].x*box.width,y:box.y+points[0].y*box.height};
-        const shot=await page.screenshot({caret:'hide'});check(signal);
-        const found=await locateClick(shot,step.visual,original,box,signal);
-        dx=found.x-original.x;dy=found.y-original.y;
-        onVisual(found.relocated?'点击图像已重新定位':'点击图像原位置校验通过');
+      const original={x:box.x+points[0].x*box.width,y:box.y+points[0].y*box.height};
+      const coordinates=p=>'('+p.x.toFixed(1)+', '+p.y.toFixed(1)+')';
+      const fallback=reason=>onVisual(reason+'，回退录制原坐标 '+coordinates(original),'warn');
+      let dx=0,dy=0,confirmed=null;
+      const repeated=await repeats?.reuse(page,frame,el,step,box,original);check(signal);
+      if(repeated){
+        dx=repeated.x-original.x;dy=repeated.y-original.y;confirmed=repeated;
+        onVisual('连续同点点击第 '+repeated.count+' 次，复用本段已确认坐标 '+coordinates(repeated)+'（录制坐标 '+coordinates(original)+'）','info');
       }
+      else if(step.visualError)fallback('录制点击图像不可用');
+      else if(step.visual){
+        let shot;
+        try{shot=await page.screenshot({caret:'hide'});}
+        catch(error){check(signal);if(page.isClosed())throw error;fallback('回放截图失败');}
+        check(signal);
+        if(shot){
+          try{
+            const found=await locateClick(shot,step.visual,original,box,signal);
+            if(found.region==='center')onVisual('完整点击图未匹配，中央 32×32 特征区域校验通过（阈值 90%）','info');
+            dx=found.x-original.x;dy=found.y-original.y;confirmed={x:found.x,y:found.y,count:1};
+            onVisual(found.relocated?'点击图像已重新定位：原坐标 '+coordinates(original)+' → 点击坐标 '+coordinates(found):'点击图像原位置校验通过，点击坐标 '+coordinates(original),'info');
+          }catch(error){
+            check(signal);
+            const reason={VISUAL_NOT_FOUND:'扫描当前画布后未找到匹配图像',VISUAL_AMBIGUOUS:'扫描当前画布发现多个匹配目标',VISUAL_INVALID:'点击参考图像无效或图案特征不足'}[error.code];
+            if(!reason)throw error;
+            fallback(reason);
+          }
+        }
+      }else onVisual('没有点击参考图，使用录制原坐标 '+coordinates(original),'info');
       check(signal);
       const move=point=>page.mouse.move(box.x+point.x*box.width+dx,box.y+point.y*box.height+dy);
+      const clickedElement=confirmed&&repeats?await el.elementHandle():null;
+      try {
       await move(points[0]);await page.mouse.down({button:step.button});
       try {
         for(let i=1;i<points.length;i++) {
           await sleep(Math.min(1000,Math.max(0,points[i].t-points[i-1].t)),signal);await move(points[i]);
         }
-      } finally {await page.mouse.up({button:step.button}).catch(()=>{});}
+      } finally {await page.mouse.up({button:step.button});}
+      check(signal);
+      if(confirmed)await repeats?.remember(page,frame,el,step,box,original,confirmed,confirmed.count,clickedElement);
+      else await repeats?.clear();
+      }catch(error){await repeats?.clear();throw error;}
+      finally{await clickedElement?.dispose().catch(()=>{});}
       break;
     }
     default:throw new Error('未知操作：'+step.type);
@@ -253,12 +289,13 @@ class Runner extends EventEmitter {
   }
   async run(id) {
     const signal=this.controller.signal,cfg=this.cfg;
-    let attempts=0,browser,currentPage,currentStep=0;
+    let attempts=0,browser,currentPage,currentStep=0,repeats;
     this.state(id,'等待启动',{recoveries:0});
     try {
       await sleep((id-1)*350,signal);
       while(!signal.aborted) {
         try {
+          repeats=new RepeatClicks();
           this.state(id,attempts?'恢复中':'启动中',{recoveries:attempts});
           browser=await chromium.launch(launchOptions(cfg,cfg.headless));this.browsers.add(browser);check(signal);
           const context=await browser.newContext({viewport:this.flow.viewport,deviceScaleFactor:1,locale:'zh-CN'});
@@ -282,6 +319,7 @@ class Runner extends EventEmitter {
             const page=pages.get(step.page||0);if(!page)throw new Error('弹出标签页未出现');
             currentPage=page;
             if(step.type==='checkpoint') {
+              await repeats.clear();
               this.state(id,'等待检查点 #'+(i+1));
               let lastLog=0;
               await waitForCheckpoint(page,step,cfg,signal,score=>{
@@ -289,7 +327,7 @@ class Runner extends EventEmitter {
                 if(Date.now()-lastLog>3000){this.log(id,'info','检查点 #'+(i+1)+' 匹配 '+(score*100).toFixed(1)+'%，等待达到 '+((step.threshold??cfg.threshold)*100).toFixed(0)+'%');lastLog=Date.now();}
               });
               this.log(id,'info','检查点 #'+(i+1)+' 已通过，继续执行');
-            } else await replayStep(page,step,signal,message=>this.log(id,'info',message));
+            } else await replayStep(page,step,signal,(message,level='info')=>this.log(id,level,message),repeats);
           }
           this.state(id,'等待页面稳定');await sleep(cfg.grace*1000,signal);
           let failures=0,healthy=0;
@@ -322,6 +360,7 @@ class Runner extends EventEmitter {
           attempts++;this.state(id,'准备恢复',{recoveries:attempts});
           this.log(id,'warn','第 '+attempts+' 次恢复：重建浏览器并从头回放');
         } finally {
+          await repeats?.clear();
           if(browser){this.browsers.delete(browser);await browser.close().catch(()=>{});browser=null;}
         }
         await sleep(Math.min(30000,attempts*2000),signal);

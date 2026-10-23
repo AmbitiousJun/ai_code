@@ -6,7 +6,7 @@ const fs=require('fs');
 const html=`<style>body{margin:13px}canvas{border:2px solid black;width:600px;height:300px}</style><canvas id="game" width="1200" height="600"></canvas><script>
 const c=document.querySelector('canvas'),ctx=c.getContext('2d');let bx=80,by=80;window.hits=0;
 window.draw=(x,y,duplicate=false)=>{bx=x;by=y;ctx.fillStyle='#16304d';ctx.fillRect(0,0,1200,600);const tile=(x,y)=>{for(let j=0;j<64;j++)for(let i=0;i<64;i++){ctx.fillStyle='rgb('+((i*17+j*31)%256)+','+((i*7+j*11)%256)+',120)';ctx.fillRect((x+i)*2,(y+j)*2,2,2);}};tile(x,y);if(duplicate)tile(450,180);};draw(80,80);
-c.onpointerdown=e=>{const r=c.getBoundingClientRect(),x=e.clientX-r.left-2,y=e.clientY-r.top-2;if(x>=bx&&x<bx+64&&y>=by&&y<by+64){hits++;ctx.clearRect(0,0,1200,600);}};
+c.onpointerdown=e=>{window.clicks=(window.clicks||0)+1;const r=c.getBoundingClientRect(),x=e.clientX-r.left-2,y=e.clientY-r.top-2;window.lastPoint={x,y};if(x>=bx&&x<bx+64&&y>=by&&y<by+64){hits++;ctx.clearRect(0,0,1200,600);}};
 </script>`;
 const webgl=`<canvas id="game" width="600" height="300"></canvas><script>
 const c=document.querySelector('canvas'),gl=c.getContext('webgl');window.hits=0;let bx=80;
@@ -28,18 +28,34 @@ function render(){gl.disable(gl.SCISSOR_TEST);gl.clearColor(.05,.1,.2,1);gl.clea
       const context=await browser.newContext({viewport:flow.viewport,deviceScaleFactor:1});const page=await context.newPage();await page.goto(flow.steps.find(s=>s.type==='goto').url);
       const frame=await (await page.locator('#frame').elementHandle()).contentFrame();await frame.waitForSelector('#game');await frame.evaluate(([x,y])=>draw(x,y),[x,y]);
       await replayStep(page,step,undefined,m=>messages.push(m));assert.equal(await frame.evaluate(()=>hits),1);
-      await frame.evaluate(()=>draw(200,100,true));await assert.rejects(replayStep(page,step),{code:'VISUAL_AMBIGUOUS'});assert.equal(await frame.evaluate(()=>hits),1);
-      await frame.evaluate(()=>ctx.clearRect(0,0,1200,600));await assert.rejects(replayStep(page,step),{code:'VISUAL_NOT_FOUND'});assert.equal(await frame.evaluate(()=>hits),1);
+      const logs=[];const log=(message,level)=>logs.push({message,level});
+      await frame.evaluate(()=>draw(200,100,true));await replayStep(page,step,undefined,log);assert.equal(await frame.evaluate(()=>hits),1);
+      let point=await frame.evaluate(()=>lastPoint);assert.ok(Math.abs(point.x-(step.points[0].x*604-2))<1&&Math.abs(point.y-(step.points[0].y*304-2))<1,JSON.stringify({point,recorded:step.points[0]}));
+      assert.ok(logs.some(l=>l.level==='warn'&&l.message.includes('多个匹配目标')&&l.message.includes('回退录制原坐标')));
+      await frame.evaluate(()=>ctx.clearRect(0,0,1200,600));await replayStep(page,step,undefined,log);assert.equal(await frame.evaluate(()=>hits),1);
+      point=await frame.evaluate(()=>lastPoint);assert.ok(Math.abs(point.x-(step.points[0].x*604-2))<1&&Math.abs(point.y-(step.points[0].y*304-2))<1,JSON.stringify({point,recorded:step.points[0]}));
+      assert.ok(logs.some(l=>l.level==='warn'&&l.message.includes('未找到匹配图像')));
+      await replayStep(page,{...step,visual:null,visualError:'旧流程截图为空白'},undefined,log);
+      await replayStep(page,{...step,visual:{...step.visual,image:'invalid PNG'}},undefined,log);
+      assert.equal(await frame.evaluate(()=>clicks),5);
+      const screenshot=page.screenshot;page.screenshot=async()=>{throw new Error('simulated capture failure')};
+      try{await replayStep(page,step,undefined,log);}finally{page.screenshot=screenshot;}
+      assert.equal(await frame.evaluate(()=>clicks),6);assert.ok(logs.some(l=>l.message.includes('回放截图失败')));
+      assert.ok(logs.some(l=>l.message.includes('录制点击图像不可用')));
+      assert.ok(logs.some(l=>l.message.includes('参考图像无效')));
+      await frame.evaluate(()=>{const i=document.createElement('input');i.id='next';document.body.append(i)});
+      await replayStep(page,{type:'fill',frame:step.frame,selector:'#next',value:'continued'});assert.equal(await frame.locator('#next').inputValue(),'continued');
+      const controller=new AbortController();controller.abort();await assert.rejects(replayStep(page,step,controller.signal),/STOPPED/);assert.equal(await frame.evaluate(()=>clicks),6);
       await context.close();
     }));
-    assert.ok(messages.includes('点击图像原位置校验通过'));assert.ok(messages.includes('点击图像已重新定位'));
+    assert.ok(messages.some(m=>m.startsWith('点击图像原位置校验通过')));assert.ok(messages.some(m=>m.startsWith('点击图像已重新定位')));
     const glFlow={id:'webgl',viewport:flow.viewport,steps:[]};rec=new Recorder(glFlow);await rec.start();await rec.page.goto('http://127.0.0.1:'+server.address().port+'/webgl');
     await rec.page.mouse.move(118,118);await sleep(160);await rec.page.mouse.click(118,118);await sleep(200);await rec.stop();
-    const glStep=glFlow.steps.find(s=>s.type==='canvas');assert.ok(glStep?.visual,'WebGL default drawing-buffer capture');
+    const glStep=glFlow.steps.find(s=>s.type==='canvas');assert.ok(glStep?.visual,'WebGL default drawing-buffer capture: '+JSON.stringify(glStep));
     const glPage=await browser.newPage({viewport:flow.viewport});await glPage.goto(glFlow.steps.find(s=>s.type==='goto').url);await glPage.evaluate(()=>shift());await sleep(100);
-    await replayStep(glPage,glStep,undefined,m=>assert.equal(m,'点击图像已重新定位'));assert.equal(await glPage.evaluate(()=>hits),1);
-    fs.writeFileSync('test-results/visual-report.txt','PASS: pre-click capture before target disappears; scaled canvas; cross-origin iframe; concurrent isolated contexts with different seats; original and relocated clicks; ambiguous and missing targets blocked.\n');
+    await replayStep(glPage,glStep,undefined,m=>assert.ok(m.startsWith('点击图像已重新定位')));assert.equal(await glPage.evaluate(()=>hits),1);
+    fs.writeFileSync('test-results/visual-report.txt','PASS: pre-click capture before target disappears; scaled canvas; cross-origin iframe; concurrent isolated contexts with different seats; original and relocated clicks; ambiguous/missing/invalid templates fall back to the original coordinates with warning logs; next step continues; cancellation does not click.\n');
     fs.appendFileSync('test-results/visual-report.txt','PASS: WebGL default drawing buffer, animation-frame capture and relocated replay.\n');
-    console.log('PASS visual replay, capture, iframe, scaling, concurrency, WebGL and failure blocking');
+    console.log('PASS visual replay, capture, iframe, scaling, concurrency, WebGL and original-coordinate fallback');
   }finally{await rec?.stop();await browser?.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1;});

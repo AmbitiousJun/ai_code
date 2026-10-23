@@ -25,10 +25,10 @@ function installRecorder() {
   let pending = Promise.resolve();
   let paused=false;
   window.__flowRecorderPause=value=>{paused=!!value;clearTimeout(hoverTimer);for(const timer of scrollTimers.values())clearTimeout(timer);scrollTimers.clear();};
-  const send = data => {
+  const send = (data, visualPromise) => {
     if(paused)return;
     data.at = Date.now();
-    pending = pending.then(() => window.__flowRecord(data)).catch(() => {});
+    pending = pending.then(async() => {if(visualPromise)Object.assign(data,await visualPromise);return window.__flowRecord(data);}).catch(() => {});
   };
   window.__flowFlush = () => pending;
   const target = e => e.composedPath()[0];
@@ -50,10 +50,7 @@ function installRecorder() {
     send({ type: 'click', selector: selector(el), button: 'left', count: e.detail > 1 ? 2 : 1 });
   }, true);
   let gesture = null;
-  // Read the canvas before the game's pointer handler changes its contents.
-  // WebGL often clears its drawing buffer after presentation, so keep a recent
-  // patch at the pointer after animation callbacks as a fallback.
-  let pointer = null, recent = null, sampledAt = 0;
+  // Read before game handlers; compositor frames cover unreadable WebGL and layers.
   function patch(el, x, y) {
     const r=el.getBoundingClientRect(), style=getComputedStyle(el);
     const left=r.left+parseFloat(style.borderLeftWidth)+parseFloat(style.paddingLeft);
@@ -72,27 +69,17 @@ function installRecorder() {
     if(opaque<48*48*.95||distinct<48*48*.08)return null;
     return {image:c.toDataURL('image/png').split(',')[1],offset:{x:x-left-px,y:y-top-py},width:48,height:48};
   }
-  const raf=window.requestAnimationFrame.bind(window);
-  window.requestAnimationFrame=callback=>raf(time=>{
-    try{return callback(time);}finally{
-      if(!paused&&pointer&&performance.now()-sampledAt>80){
-        sampledAt=performance.now();
-        try{const visual=patch(pointer.el,pointer.x,pointer.y);if(visual)recent={...pointer,visual,at:performance.now()};}catch{}
-      }
-    }
-  });
-  document.addEventListener('pointermove',e=>{
-    const el=target(e);pointer=el?.tagName==='CANVAS'?{el,x:e.clientX,y:e.clientY}:null;
-  },true);
   document.addEventListener('pointerdown', e => {
     clearTimeout(hoverTimer);
     const el = target(e);
-    if (el?.tagName !== 'CANVAS') return;
+    if (paused || el?.tagName !== 'CANVAS') return;
     const r = el.getBoundingClientRect();
     gesture = { type: 'canvas', selector: selector(el), button: ['left', 'middle', 'right'][e.button] || 'left', points: [], started: performance.now(), rect: r };
     try{gesture.visual=patch(el,e.clientX,e.clientY);}catch{}
-    if(!gesture.visual&&recent?.el===el&&performance.now()-recent.at<250&&Math.abs(recent.x-e.clientX)<1&&Math.abs(recent.y-e.clientY)<1)gesture.visual=recent.visual;
-    if(!gesture.visual)gesture.visualError='点击图像为空白或无法读取，请选择有明显图案的按钮重新录制';
+    if(!gesture.visual){
+      const point={x:e.clientX,y:e.clientY,at:Date.now(),rect:{x:r.x,y:r.y,width:r.width,height:r.height}};
+      gesture.visualPromise=window.__flowVisual(point).catch(()=>({visualError:'未能获取点击前画面，请重新录制'}));
+    }
     point(e);
   }, true);
   function point(e) {
@@ -106,11 +93,12 @@ function installRecorder() {
   document.addEventListener('pointerup', e => {
     if (!gesture) return;
     point(e);
-    const { rect, started, ...data } = gesture;
+    const { rect, started, visualPromise, ...data } = gesture;
+    const dragged=data.points.some(p=>Math.hypot((p.x-data.points[0].x)*rect.width,(p.y-data.points[0].y)*rect.height)>8);
     // A drag is a relative trajectory, not a button lookup.
-    if(data.points.some(p=>Math.hypot((p.x-data.points[0].x)*rect.width,(p.y-data.points[0].y)*rect.height)>8)){delete data.visual;delete data.visualError;}
+    if(dragged){delete data.visual;delete data.visualError;}
     gesture = null;
-    send(data);
+    send(data,dragged?null:visualPromise);
   }, true);
   document.addEventListener('contextmenu', e => {
     const el = target(e);
