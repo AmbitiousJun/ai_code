@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.5**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；`AGEMTS.md` 保留同步副本。
+核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.6**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在最终巡检异常时重建实例。
 
@@ -9,7 +9,7 @@ FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户
 | 层次 | 技术 | 当前职责 |
 | --- | --- | --- |
 | 桌面运行时 | Electron 45.0.0 | 主窗口、主进程、IPC、文件对话框、Windows 用户绑定加密 |
-| GUI | 原生 HTML / CSS / JavaScript | 深色工作台、配置表单、步骤列表、截图框选、实例状态与滚动日志 |
+| GUI | 原生 HTML / CSS / JavaScript | 浅色 / 暗色 / 适应系统工作台、配置表单、步骤列表、截图框选、实例状态与滚动日志 |
 | 自动化 | playwright-core 1.64.1 | 控制本机 Google Chrome，录制事件、操作 DOM / iframe / Canvas、截图 |
 | 图像处理 | pngjs 7.0.0 | PNG 解码、区域裁剪、局部模板匹配 |
 | 基础能力 | Node.js 内置模块，CommonJS | 文件持久化、事件、哈希、随机数、UUID、取消信号 |
@@ -52,7 +52,6 @@ flowchart LR
 ```text
 D:\ai_code\FlowSentinel\
 ├── AGENTS.md                    本文：技术架构、运行流程与维护导航
-├── AGEMTS.md                    历史拼写的同步副本
 ├── README.md                    用户操作说明、随机模板、运行与排错方法
 ├── VALIDATION.md                已执行的验收项目、结果及验证范围
 ├── package.json                 应用入口、依赖、npm 命令、Windows 打包配置
@@ -73,6 +72,8 @@ D:\ai_code\FlowSentinel\
 │       ├── index.html           工作台结构、配置控件和截图选择对话框
 │       ├── app.js               GUI 状态、IPC 调用、事件渲染和框选交互
 │       ├── style.css            深色主题、布局、组件样式和响应式规则
+│       ├── theme.css            浅色组件配色与主题选择器样式
+│       ├── theme.js             首屏主题、系统监听与偏好保存
 │       ├── icon.png             主窗口 PNG 图标
 │       └── icon.ico             Windows 打包图标
 ├── test/
@@ -87,10 +88,11 @@ D:\ai_code\FlowSentinel\
 │   ├── e2e.js                   真实 Chrome 录制、变量回放、双实例与恢复测试
 │   ├── checkpoint-e2e.js        检查点等待、忽略停顿、超时阻断与停止测试
 │   ├── ui-smoke.js              源码版及解包版 Electron GUI 验收
+│   ├── theme-smoke.js           三态主题、系统变化、刷新与重启验收
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.5-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.6-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -200,7 +202,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.5 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.6 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -424,3 +426,12 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - `ui/app.js/addLog()` 显示 160×90 缩略图；`index.html/logImageDialog` 与 `style.css` 提供独立放大对话框，点击大图可切换原始尺寸，关闭按钮或 Esc 退出并释放大图引用。缩略图保留整幅比例，不裁掉页面内容。
 - 日志截图仅在应用内存中保留，退出应用后不保留；`activity.log` 仍只写时间、级别和消息。故障证据的原有落盘行为不变。截图是最终可信图所在页面的视口，不是桌面或所有标签页。
 - 沿用现有进程、IPC 和文件目录，无新模块、依赖或流程数据字段。维护路径：engine → main → ui；`test/e2e.js` 验证无头成功/失败带图和有头不带图，`test/ui-smoke.js` 验证缩略图、放大、关闭、刷新恢复和图片保留数量。
+
+
+## 17. 1.2.6 浅色与系统主题
+
+- 顶栏 themeSelect 提供浅色、暗色、适应系统，默认适应系统。暗色保留原配色，浅色覆盖卡片、表单、日志、状态、截图容器和弹窗；截图像素本身不变。
+- ui/theme.js 在 head 中同步加载，在正文绘制前设置根节点 data-theme；matchMedia 监听系统颜色变化，仅适应系统时跟随。手动模式不受系统切换影响。
+- 偏好保存于渲染进程 localStorage 的 flow-sentinel-theme，刷新与重启后恢复；非法值回退系统，存储不可用时支持会话内切换。不写入 Flow，不新增 IPC 或依赖。
+- Evidence → Finding → Path：theme.js 的偏好恢复与系统监听 → UI 独立管理外观 → 修改行为读 theme.js，修改浅色配色读 theme.css，入口读 index.html。theme-smoke.js 验证三态切换、模拟系统变化、刷新/重启持久化和布局。
+- 验证命令：node test/theme-smoke.js；打包后 node test/theme-smoke.js --packaged。进程架构和录制回放逻辑不变，目录树已补充两个 UI 文件和主题验收脚本。

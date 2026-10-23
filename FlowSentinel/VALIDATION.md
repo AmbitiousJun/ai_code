@@ -127,3 +127,13 @@ node test/portable-smoke.js
 - `node test/ui-smoke.js --packaged`：1.2.5 解包版通过缩略图、放大、原始尺寸、Esc/按钮关闭、刷新恢复、64 张保留上限和磁盘文字日志检查；无渲染异常。截图见忽略目录 `test-results/log-image-packaged.png`，报告见 `test-results/packaged-report.txt`。
 - 本轮功能测试使用独立数据目录和本地夹具，不操作用户已有流程。24 MiB 编码预算经过代码核对；未执行 64 实例长时间内存压力测试。
 - `npm run dist` 与 `node test/portable-smoke.js`：成功；单文件 EXE 解压启动、录制、停止和加密保存通过。产物 `dist/FlowSentinel-1.2.5-win-x64.exe`，102,865,234 字节；SHA-256：`605855A5D9868CF85550914422985DE8B1FD4E19C841927F6F25804F56F4995D`。
+
+## 1.2.6 浅色与系统主题（2026-10-23）
+
+- npm test：16/16 通过。首次沙箱执行因临时文件 rename 权限失败，沙箱外重跑通过。
+- node test/theme-smoke.js 与 --packaged：源码与解包版均通过。覆盖三种主题、模拟系统实时变化、手动模式优先、刷新及应用重启持久化、非法值回退系统、无横向溢出。首次沙箱内 Electron 启动失败，沙箱外通过。
+- 浅色和暗色界面已截图检查，证据见 test-results/theme-light.png、theme-dark.png 及对应 -packaged.png；沿用原布局，主题覆盖表单、日志和实例状态。
+- node test/ui-smoke.js --packaged：已有 GUI 回归通过，包括录制、检查点框选、配置保存、双实例回放、日志截图放大/关闭、刷新恢复和图片数量限制。
+- npm run dist -- --config.electronDist=node_modules/electron/dist：成功。node test/portable-smoke.js：最终单文件 EXE 启动、真实 Chrome 录制、停止与加密保存通过。
+- 产物：dist/FlowSentinel-1.2.6-win-x64.exe，102937883 字节。SHA-256：3C543E6802AB3346D4DB0BC982D9F30F0585B11BA7A02DFBF82D22DCEF11BFFA。
+- 验证范围：使用独立测试数据，不操作用户已有流程；系统颜色切换通过 Playwright 媒体模拟验证，未修改 Windows 个人设置。本轮未重跑全部 Canvas 专项 E2E，录制回放核心代码无变更。

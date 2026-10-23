@@ -1,7 +1,7 @@
 <!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"><title>FlowSentinel · 流程哨兵</title><link rel="stylesheet" href="style.css"></head>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"><title>FlowSentinel · 流程哨兵</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="theme.css"><script src="theme.js"></script></head>
 <body>
-<header><div class="brand"><span class="mark">◈</span><div><strong>FlowSentinel</strong><small>流程哨兵 / 浏览器自动化工作台</small></div></div><div id="status" class="badge">待机</div><button id="stopNow" class="danger" hidden>■ 停止</button><button id="openData" class="quiet">打开数据目录 ↗</button></header>
+<header><div class="brand"><span class="mark">◈</span><div><strong>FlowSentinel</strong><small>流程哨兵 / 浏览器自动化工作台</small></div></div><label class="theme-control" for="themeSelect">主题<select id="themeSelect"><option value="light">浅色</option><option value="dark">暗色</option><option value="system" selected>适应系统</option></select></label><div id="status" class="badge">待机</div><button id="stopNow" class="danger" hidden>■ 停止</button><button id="openData" class="quiet">打开数据目录 ↗</button></header>
 <div id="notice" role="alert" hidden></div>
 <main>
 <aside><div class="section-title">操作流程 <span id="flowCount">0</span></div><button id="newFlow" class="primary full">＋ 新建录制</button><div id="flowList"></div><div class="aside-note">本地保存 · Windows 加密<br>每次录制自动保存，无需手动导出。</div></aside>
@@ -39,3 +39,4 @@
 <dialog id="captureDialog"><div class="row spread"><div><h2 id="captureTitle">框选正常运行时必然出现的画面</h2><p class="hint">录制已暂停，请勿继续操作 Chrome。选取独特、静态的标志，保存或取消后恢复录制。</p></div><button id="cancelCapture" class="quiet">取消 ✕</button></div><div id="checkpointOptions" class="row" hidden><label>最长等待（秒）<input id="captureTimeout" type="number" min="1" max="600" value="60"></label><label>最低匹配率（%）<input id="captureThreshold" type="number" min="50" max="100" value="90"></label><p class="hint">没有检测到时持续等待，超时才触发恢复，随时可以停止。</p></div><div class="capture-wrap"><canvas id="captureCanvas"></canvas></div><div class="row spread"><span id="selectionInfo">尚未选择区域</span><button id="saveTrusted" class="primary" disabled>保存可信区域</button></div></dialog>
 <dialog id="logImageDialog" aria-labelledby="logImageTitle"><div class="row spread"><h2 id="logImageTitle">巡检截图</h2><button id="closeLogImage" autofocus>关闭 ✕</button></div><p class="hint">点击图片切换原始尺寸；按 Esc 关闭。</p><div class="log-image-wrap"><img id="logImage" alt="巡检页面完整视口截图"></div></dialog>
 <script src="app.js"></script></body></html>
+
