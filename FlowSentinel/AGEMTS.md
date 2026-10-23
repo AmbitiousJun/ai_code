@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.4**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；`AGEMTS.md` 保留同步副本。
+核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.5**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；`AGEMTS.md` 保留同步副本。
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在最终巡检异常时重建实例。
 
@@ -90,7 +90,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.4-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.5-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -200,7 +200,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.4 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.5 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -416,3 +416,11 @@ node test/portable-smoke.js
 vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有完整图无候选时，才检测中央 32×32 的图案特征，按相同 90% 阈值和 RGB 容差 32 重试原位及画布搜索；返回 region=center。完整图的多候选结果不被中央匹配覆盖；中央区域低特征、无候选或多候选仍按原规则回退。engine.js 输出中央特征匹配日志，成功后沿用 RepeatClicks 的逐次点击及隔离逻辑。截图检查点、流程数据格式和模块目录不变，无需重录。
 
 测试维护路径：visual.test.js 新增外围变化、中央重定位、多候选与平坦中心回归；真实运行证据仅位于忽略目录 test-results，不打包用户数据。
+
+## 16. 1.2.5 无头巡检日志截图
+
+- `engine.js/Runner.run()` 在最终巡检日志中附带本次匹配使用的完整视口 PNG，仅在 `cfg.headless` 为真时发送；成功和连续失败均附图，各实例沿用自己的目标页面截图，不增加截图请求。
+- `main.js/log(level,message,image)` 通过既有 `flow:event` 和 `init.logs` 提供图片及保留标记。主进程和 GUI 各自最多保留最近 64 张图片，Data URL 字符总量上限 24 MiB（ASCII 编码大小，不含解码像素内存）；超限释放较早图片并保留文字。文字日志仍最多 1500 条。
+- `ui/app.js/addLog()` 显示 160×90 缩略图；`index.html/logImageDialog` 与 `style.css` 提供独立放大对话框，点击大图可切换原始尺寸，关闭按钮或 Esc 退出并释放大图引用。缩略图保留整幅比例，不裁掉页面内容。
+- 日志截图仅在应用内存中保留，退出应用后不保留；`activity.log` 仍只写时间、级别和消息。故障证据的原有落盘行为不变。截图是最终可信图所在页面的视口，不是桌面或所有标签页。
+- 沿用现有进程、IPC 和文件目录，无新模块、依赖或流程数据字段。维护路径：engine → main → ui；`test/e2e.js` 验证无头成功/失败带图和有头不带图，`test/ui-smoke.js` 验证缩略图、放大、关闭、刷新恢复和图片保留数量。

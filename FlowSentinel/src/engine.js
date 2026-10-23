@@ -274,7 +274,7 @@ class Runner extends EventEmitter {
   constructor(flow, cfg, evidenceDir) {
     super();this.flow=structuredClone(flow);this.cfg=config(cfg);this.evidenceDir=evidenceDir;this.controller=new AbortController();this.browsers=new Set();this.states=[];
   }
-  log(id,level,message){this.emit('log',level,'实例 '+id+' · '+message);}
+  log(id,level,message,image){this.emit('log',level,'实例 '+id+' · '+message,image);}
   state(id,status,extra={}){this.states[id-1]={...this.states[id-1],id,status,...extra};this.emit('state',this.states);}
   start() {
     if(!this.flow.steps.some(s=>s.type==='goto'))throw new Error('流程没有录制网址');
@@ -340,7 +340,7 @@ class Runner extends EventEmitter {
             const ok=found.score>=cfg.threshold;
             if(ok){failures=0;healthy++;}else{failures++;healthy=0;}
             this.state(id,ok?'正常运行':'检查未通过',{score:found.score,checkedAt:new Date().toISOString(),failures});
-            this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures));
+            this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures),cfg.headless?'data:image/png;base64,'+shot.toString('base64'):undefined);
             if(healthy>=5)attempts=0;
             if(failures>=cfg.failures) {
               if(this.evidenceDir){fs.mkdirSync(this.evidenceDir,{recursive:true});fs.writeFileSync(path.join(this.evidenceDir,'instance-'+id+'-last-failure.png'),shot);}

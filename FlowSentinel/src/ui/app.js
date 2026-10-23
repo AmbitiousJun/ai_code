@@ -43,7 +43,28 @@ function updateControls(){
   $('deleteFlow').disabled=busy||state.running||state.recording;$('saveConfig').disabled=busy||state.running||state.recording||!selected;
   [...numeric,...checks,'chromePath','chooseChrome'].forEach(k=>$(k).disabled=state.running||state.recording);
 }
-function addLog(entry){const line=document.createElement('div');line.className='log-'+entry.level;const t=document.createElement('span');t.className='log-time';t.textContent=new Date(entry.time).toLocaleTimeString();line.append(t,document.createTextNode(entry.message));$('logs').append(line);while($('logs').children.length>1500)$('logs').firstChild.remove();if($('autoScroll').checked)$('logs').scrollTop=$('logs').scrollHeight;}
+function addLog(entry){
+  const line=document.createElement('div');line.className='log-'+entry.level;
+  const t=document.createElement('span');t.className='log-time';t.textContent=new Date(entry.time).toLocaleTimeString();
+  line.append(t,document.createTextNode(entry.message));
+  if(entry.image){
+    const button=document.createElement('button');button.className='log-screenshot';button.title='点击放大巡检截图';
+    const img=document.createElement('img');img.src=entry.image;img.alt='巡检页面截图，点击放大';button.append(img);
+    button.onclick=()=>{ $('logImage').src=img.src;$('logImageTitle').textContent=t.textContent+' · '+entry.message;$('logImageDialog').showModal(); };
+    line.append(button);
+  }else if(entry.hasScreenshot){const note=document.createElement('small');note.className='log-image-expired';note.textContent='截图已释放';line.append(note);}
+  $('logs').append(line);while($('logs').children.length>1500)$('logs').firstChild.remove();
+  let count=0,size=0;
+  for(const img of [...$('logs').querySelectorAll('.log-screenshot img')].reverse()){
+    count++;size+=img.src.length;
+    if(count>64||size>24*1024*1024){const note=document.createElement('small');note.className='log-image-expired';note.textContent='截图已释放';img.parentElement.replaceWith(note);}
+  }
+  if($('autoScroll').checked)$('logs').scrollTop=$('logs').scrollHeight;
+}
+$('closeLogImage').onclick=()=>$('logImageDialog').close();
+$('logImageDialog').addEventListener('close',()=>$('logImage').removeAttribute('src'));
+$('logImage').onclick=()=>$('logImage').classList.toggle('original-size');
+$('logImageDialog').addEventListener('close',()=>$('logImage').classList.remove('original-size'));
 function renderStates(states){latestStates=states.filter(Boolean);const healthy=latestStates.filter(s=>s.status==='正常运行').length;$('metricHealthy').textContent=healthy+' / '+latestStates.length;const scores=latestStates.filter(s=>s.score!=null);$('metricScore').textContent=scores.length?(scores.reduce((sum,s)=>sum+s.score,0)/scores.length*100).toFixed(1)+'%':'—';$('instancesPanel').hidden=!states.length;$('instances').replaceChildren();latestStates.forEach(s=>{const div=document.createElement('div');div.className='instance'+(s.status==='正常运行'?' good':['需要人工处理','检查未通过'].includes(s.status)?' bad':'');const title=document.createElement('strong');title.textContent='#'+s.id+' · '+s.status;const detail=document.createElement('small');detail.textContent=(s.score==null?'尚未巡检':'匹配 '+(s.score*100).toFixed(1)+'%')+' · 恢复 '+(s.recoveries||0)+' 次';const time=document.createElement('small');time.textContent=s.checkedAt?'检查于 '+new Date(s.checkedAt).toLocaleTimeString():'';div.append(title,detail,time);$('instances').append(div);});}
 async function task(fn){busy=true;updateControls();try{await fn();}catch(e){notice(e.message);}finally{busy=false;updateControls();}}
 $('newFlow').onclick=()=>{selected=null;renderList();renderDetail();$('name').focus();};

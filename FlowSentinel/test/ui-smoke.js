@@ -41,10 +41,24 @@ const {fixture}=require('./fixture');const {randomUUID}=require('crypto');const 
   const saved=await page.evaluate(()=>window.flowAPI.call('list'));
   assert.equal(Object.keys(saved.data.find(x=>x.id===flow.id).variables).length,2);
   await page.locator('#start').click();await page.waitForFunction(()=>document.querySelectorAll('.instance.good').length===2,{},{timeout:45000});
+  await page.locator('.log-screenshot').first().waitFor();
+  const screenshot=page.locator('.log-screenshot').first();
+  assert.ok(await screenshot.locator('img').evaluate(img=>img.naturalWidth===1280));
+  await screenshot.click();await page.locator('#logImageDialog').waitFor({state:'visible'});
+  await page.screenshot({path:packaged?'test-results/log-image-packaged.png':'test-results/log-image.png'});
+  await page.locator('#logImage').click();assert.ok(await page.locator('#logImage').evaluate(el=>el.classList.contains('original-size')));
+  await page.keyboard.press('Escape');await page.locator('#logImageDialog').waitFor({state:'hidden'});
+  await page.waitForFunction(()=>!document.querySelector('#logImage').hasAttribute('src'));
+  await screenshot.click();await page.locator('#closeLogImage').click();
+  await page.reload();await page.locator('.log-screenshot').first().waitFor();
+  assert.ok(!fs.readFileSync(path.join(data,'activity.log'),'utf8').includes('data:image'));
   await page.locator('#notice').evaluate(el=>el.hidden=true);
   await page.locator('.workspace').evaluate(el=>el.scrollTop=0);
   await page.screenshot({path:packaged?'test-results/gui-packaged.png':'test-results/gui-recorded.png'});
   await page.locator('#stopNow').click();await page.waitForFunction(()=>document.querySelector('#status').textContent==='待机');
+  await page.evaluate(()=>{const image=document.querySelector('.log-screenshot img').src;for(let i=0;i<70;i++)addLog({time:new Date().toISOString(),level:'info',message:'截图保留数量验收',image});});
+  assert.equal(await page.locator('.log-screenshot').count(),64);
+  assert.ok(await page.locator('.log-image-expired').count()>0);
   const visualFlow=JSON.parse(fs.readFileSync('test-results/visual-flow.json','utf8'));visualFlow.id=randomUUID();visualFlow.config=config();visualFlow.updatedAt=new Date().toISOString();
   const visualEncrypted=await app.evaluate(({safeStorage},f)=>safeStorage.encryptString(JSON.stringify(f)).toString('base64'),visualFlow);
   fs.writeFileSync(path.join(data,'flows',visualFlow.id+'.flow'),Buffer.from(visualEncrypted,'base64'));
@@ -53,6 +67,6 @@ const {fixture}=require('./fixture');const {randomUUID}=require('crypto');const 
   await page.screenshot({path:packaged?'test-results/visual-preview-packaged.png':'test-results/visual-preview.png'});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.deepEqual(errors,[]);
-  fs.writeFileSync(packaged?'test-results/packaged-report.txt':'test-results/ui-report.txt','PASS: Electron GUI launch, recording start/stop, config save, encrypted persistence, field templates, two headless replays through GUI, image monitoring, always-visible stop, logs, layout and no renderer exceptions\n');
+  fs.writeFileSync(packaged?'test-results/packaged-report.txt':'test-results/ui-report.txt','PASS: Electron GUI launch, recording start/stop, config save, encrypted persistence, field templates, two headless replays through GUI, image monitoring, always-visible stop, logs with headless thumbnails, enlarge/original-size/Escape/close, reload retention, 64-image cap, text-only disk logs, layout and no renderer exceptions\n');
  }finally{await app?.close();await site.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

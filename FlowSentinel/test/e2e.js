@@ -29,8 +29,9 @@ async function until(fn,timeout=45000){const end=Date.now()+timeout;while(Date.n
     flow.variables={[fieldId(outerField)]:{mode:'template',template:'acct_{{instance}}_{{digits:8}}@example.com'},[fieldId(innerField)]:{mode:'template',template:'{{int:100000:999999}}'}};
     fs.writeFileSync(path.join(dir,'recorded-flow.json'),JSON.stringify(flow));
     const cfg=config({count:2,interval:1,failures:2,retries:2,grace:0,maxStepDelay:100,stepTimeout:7000});
-    run=new Runner(flow,cfg,path.join(dir,'evidence'));const logs=[];run.on('log',(l,m)=>{logs.push(m);console.log('[run]',l,m);});run.start();
+    run=new Runner(flow,cfg,path.join(dir,'evidence'));const images=[];const logs=[];run.on('log',(l,m,image)=>{if(image)images.push({m,image});logs.push(m);console.log('[run]',l,m);});run.start();
     await until(()=>run.states.length===2&&run.states.every(s=>s.status==='正常运行'));
+    assert.ok(images.length>=2);assert.ok(images.every(x=>x.image.startsWith('data:image/png;base64,')&&x.m.includes('可信图像匹配')));
     const generated=[];
     for(const b of run.browsers){const p=b.contexts()[0].pages()[0];const value=await p.frameLocator('#outer').locator('#outerText').inputValue();generated.push(value);assert.match(value,/^acct_[12]_\d{8}@example\.com$/);assert.match(await p.frameLocator('#outer').frameLocator('#inner').locator('#innerText').inputValue(),/^\d{6}$/);assert.equal(await p.frameLocator('#outer').frameLocator('#inner').locator('#agree').isChecked(),true);assert.equal(await p.frameLocator('#outer').frameLocator('#inner').locator('#keyResult').textContent(),'ArrowRight');}
     assert.notEqual(generated[0],generated[1]);report.push('PASS: whole-field random integer and partial-field random digits with instance IDs in real cross-origin inputs');
@@ -45,6 +46,11 @@ async function until(fn,timeout=45000){const end=Date.now()+timeout;while(Date.n
     report.push('PASS: stop interrupts monitoring and closes only task browsers; logs redact form contents');
     run=new Runner({...flow,steps:[{type:'goto',url:site.url,page:0,frame:[],delay:60000}]},config({maxStepDelay:60000,ignoreRecordedDelays:false}),dir);run.start();await sleep(1000);const start=Date.now();await run.stop();assert.ok(Date.now()-start<5000);
     report.push('PASS: stop interrupts long replay wait');
+    run=new Runner(flow,config({headless:false,interval:1,grace:0,stepTimeout:7000}),dir);
+    const visibleImages=[];run.on('log',(l,m,image)=>{if(image)visibleImages.push(image);});run.start();
+    await until(()=>run.states[0]?.status==='正常运行');await run.stop();assert.equal(visibleImages.length,0);
+    assert.ok(images.some(x=>x.m.includes('连续失败')));
+    report.push('PASS: headless healthy/failed monitoring emits PNG screenshots per instance; visible monitoring emits none');
     fs.writeFileSync(path.join(dir,'e2e-report.txt'),report.join('\n'));console.log(report.join('\n'));
   }finally{await run?.stop();await rec?.stop();await site.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

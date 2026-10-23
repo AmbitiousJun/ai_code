@@ -9,13 +9,16 @@ let logs=[],states=[];
 if(process.env.FLOW_SENTINEL_TEST_DATA)app.setPath('userData',process.env.FLOW_SENTINEL_TEST_DATA);
 const dataDir=()=>app.getPath('userData');
 function emit(event){if(win&&!win.isDestroyed())win.webContents.send('flow:event',event);}
-function log(level,message){
+function log(level,message,image){
   const entry={time:new Date().toISOString(),level,message};logs.push(entry);if(logs.length>1500)logs.shift();
+  if(image){entry.image=image;entry.hasScreenshot=true;}
+  let imageCount=0,imageSize=0;
+  for(let i=logs.length-1;i>=0;i--){if(logs[i].image){imageCount++;imageSize+=logs[i].image.length;if(imageCount>64||imageSize>24*1024*1024)delete logs[i].image;}}
   emit({type:'log',entry});
   try{
     const file=path.join(dataDir(),'activity.log');
     if(fs.existsSync(file)&&fs.statSync(file).size>5*1024*1024)fs.renameSync(file,path.join(dataDir(),'activity.previous.log'));
-    fs.appendFileSync(file,JSON.stringify(entry)+'\n');
+    fs.appendFileSync(file,JSON.stringify({time:entry.time,level,message})+'\n');
   }catch{}
 }
 function summary(flow){return {...flow,config:config(flow.config),fields:fields(flow),steps:flow.steps.map((s,i)=>({index:i+1,type:s.type,label:label(s),frameDepth:s.frame?.length||0,page:s.page||0,timeout:s.timeout,visualImage:s.visual?'data:image/png;base64,'+s.visual.image:undefined,visualError:s.visualError,checkpointImage:s.type==='checkpoint'?'data:image/png;base64,'+s.trusted.image:undefined})),trusted:flow.trusted?{...flow.trusted,image:'data:image/png;base64,'+flow.trusted.image}:null};}

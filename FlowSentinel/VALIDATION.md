@@ -118,3 +118,12 @@ node test/portable-smoke.js
 验证边界：实际游戏验证为单实例九连击段；不同座位并发由本地双实例夹具验证。第 66 步旧截图不可用、第 67 步无匹配仍按已有策略回退，未宣称整个流程每张图均匹配。检查点等待策略、流程数据和阈值未改动。
 
 打包版 ui-smoke.js --packaged 和最终 portable-smoke.js 均通过。构建命令：npm run dist -- --config.electronDist=node_modules/electron/dist。产物 FlowSentinel-1.2.4-win-x64.exe，102935390 字节；SHA-256：2eb81641ba25f9677d7fc03ed4fb40e6dca967fad31892799bb91914ba149ce7。
+
+## 1.2.5 无头巡检日志截图（2026-10-23）
+
+- `npm test`：16 项单元测试通过。首次沙箱执行遇到临时文件 rename 权限限制；沙箱外重跑全部通过。
+- `node test/e2e.js`：真实 Chrome 录制、双实例回放、失败恢复与停止通过；新增断言验证无头正常/失败巡检携带 PNG，有头巡检不携带图片。
+- `node test/ui-smoke.js`：源码版 GUI 验收通过。首次新增测试在 dialog close 事件触发前检查图片释放，调整为等待 close 处理完成后通过。
+- `node test/ui-smoke.js --packaged`：1.2.5 解包版通过缩略图、放大、原始尺寸、Esc/按钮关闭、刷新恢复、64 张保留上限和磁盘文字日志检查；无渲染异常。截图见忽略目录 `test-results/log-image-packaged.png`，报告见 `test-results/packaged-report.txt`。
+- 本轮功能测试使用独立数据目录和本地夹具，不操作用户已有流程。24 MiB 编码预算经过代码核对；未执行 64 实例长时间内存压力测试。
+- `npm run dist` 与 `node test/portable-smoke.js`：成功；单文件 EXE 解压启动、录制、停止和加密保存通过。产物 `dist/FlowSentinel-1.2.5-win-x64.exe`，102,865,234 字节；SHA-256：`605855A5D9868CF85550914422985DE8B1FD4E19C841927F6F25804F56F4995D`。
