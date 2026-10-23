@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'"><title>FlowSentinel · 流程哨兵</title><link rel="stylesheet" href="style.css"></head>
+<body>
+<header><div class="brand"><span class="mark">◈</span><div><strong>FlowSentinel</strong><small>流程哨兵 / 浏览器自动化工作台</small></div></div><div id="status" class="badge">待机</div><button id="stopNow" class="danger" hidden>■ 停止</button><button id="openData" class="quiet">打开数据目录 ↗</button></header>
+<div id="notice" role="alert" hidden></div>
+<main>
+<aside><div class="section-title">操作流程 <span id="flowCount">0</span></div><button id="newFlow" class="primary full">＋ 新建录制</button><div id="flowList"></div><div class="aside-note">本地保存 · Windows 加密<br>每次录制自动保存，无需手动导出。</div></aside>
+<section class="workspace">
+<div class="workspace-top"><span>工作台 <span class="crumb">/ 自动化流程</span></span><span class="local-indicator">● 本地执行 · 数据加密</span></div>
+<div class="intro"><div><div class="eyebrow">RECORD → REPLAY → WATCH</div><h1 id="flowTitle">录一次，持续守护</h1><p id="flowInfo">打开独立 Chrome，录制表单、Canvas 与 iframe 操作。</p></div><button id="deleteFlow" class="quiet danger" hidden>删除流程</button></div>
+<div class="metrics"><div class="metric"><span class="metric-icon">≋</span><div><small>录制步骤</small><strong id="metricSteps">00</strong></div><span class="metric-note">可重复执行</span></div><div class="metric"><span class="metric-icon">◉</span><div><small>健康实例</small><strong id="metricHealthy">0 <em>/ 0</em></strong></div><span class="metric-note">实时监控</span></div><div class="metric"><span class="metric-icon">⌁</span><div><small>平均图像匹配</small><strong id="metricScore">—</strong></div><span class="metric-note">视觉巡检</span></div></div>
+<div class="content-layout"><div class="controls-column">
+<section id="newPanel" class="card"><h2><span class="step-number">01</span> 创建录制</h2><div class="row"><label class="grow">流程名称<input id="name" placeholder="例如：业务系统登录与运行" maxlength="80"></label><label>视口宽<input id="width" type="number" value="1280" min="640" max="3840"></label><label>视口高<input id="height" type="number" value="720" min="480" max="2160"></label></div><p class="hint">浏览器打开后，在地址栏输入网址并完成操作。录制与无头执行使用相同视口。</p><button id="record" class="primary">● 打开 Chrome 并录制</button><div class="capabilities"><span>✓ Vue 表单</span><span>✓ Canvas 轨迹</span><span>✓ 跨域 iframe</span></div></section>
+<section id="recordPanel" class="card" hidden><div class="row spread"><div><h2><span class="record-dot">●</span> 正在录制</h2><p class="hint">页面加载完成后可添加“继续执行”检查点，再继续录制后续操作。</p></div><div class="actions"><button id="checkpoint">＋ 继续执行检查点</button><button id="snapshot">最终巡检截图</button><button id="stopRecord" class="danger">结束录制</button></div></div><p class="hint">Canvas 出现不等于加载完成。请在加载结束、按钮可点击时插入截图检查点；截图框选期间录制暂停。</p></section>
+<section id="detailPanel" class="card" hidden><div class="row spread"><h2>02 / 流程与可信图像</h2><span id="stepCount" class="muted"></span></div><div class="flow-detail"><div id="steps"></div><div class="preview"><img id="trustedImage" alt="可信图像" hidden><p id="trustedInfo">尚未设置可信区域</p></div></div></section>
+<section id="variablesPanel" class="card" hidden><h2><span class="step-number">03</span> 表单变量 <span class="mini-badge">整段 / 片段随机</span></h2><p class="hint">保持原值，或用模板替换指定字段。例：<code>user_{{digits:6}}@example.com</code>。同一次回放内，同一字段复用生成值；自动恢复时重新生成。</p><div id="variableFields"></div><details class="template-help"><summary>查看模板语法与示例</summary><p><code>{{int:1000:9999}}</code> → 4 位随机整数<br><code>138{{digits:8}}</code> → 固定前缀 + 8 位随机数字<br><code>user_{{letters:6}}_{{instance}}</code> → 随机字母 + 实例编号<br><code>{{uuid}}</code> → 随机 UUID<br>可组合多个片段。随机值不保证唯一，唯一标识优先用 UUID。</p></details></section>
+<datalist id="templateExamples"><option value="{{int:1000:9999}}"><option value="138{{digits:8}}"><option value="user_{{letters:6}}_{{instance}}"><option value="user_{{digits:6}}@example.com"><option value="{{uuid}}"></datalist>
+<section class="card"><h2><span class="step-number">04</span> 执行与巡检配置</h2><div class="grid">
+<label>并发实例数<input id="count" type="number" value="1" min="1" max="64"></label>
+<label>巡检间隔（秒）<input id="interval" type="number" value="15" min="1" max="3600"></label>
+<label>最低匹配率（%）<input id="threshold" type="number" value="90" min="50" max="100" step="1"></label>
+<label>连续失败次数<input id="failures" type="number" value="3" min="1" max="20"></label>
+<label>连续恢复上限<input id="retries" type="number" value="5" min="0" max="100"></label>
+<label>回放后稳定等待（秒）<input id="grace" type="number" value="5" min="0" max="300"></label>
+<label>图像位置容差（像素）<input id="radius" type="number" value="12" min="0" max="64"></label>
+<label>单步超时（秒）<input id="stepTimeout" type="number" value="15" min="1" max="120"></label>
+<label>保留录制间隔时的上限（秒）<input id="maxStepDelay" type="number" value="10" min="0" max="300"></label>
+<label>固定操作间隔（毫秒）<input id="actionInterval" type="number" value="200" min="0" max="10000"></label>
+<label>检查点默认超时（秒）<input id="checkpointTimeout" type="number" value="60" min="1" max="600"></label>
+</div><div class="options"><label><input id="ignoreRecordedDelays" type="checkbox" checked> 忽略录制时的停留时间</label><label><input id="headless" type="checkbox" checked> 无头运行</label><label><input id="mute" type="checkbox" checked> 静音</label><label><input id="noThrottle" type="checkbox" checked> 禁用后台节流</label></div><p class="hint">默认使用固定操作间隔，不重放人工停顿。悬停触发菜单的动作仍保留，拖动手势内部时序仍保留。异步加载请用截图检查点等待。</p>
+<div class="row"><label class="grow">Chrome 路径（留空自动使用已安装的 Chrome）<input id="chromePath" placeholder="自动检测 Google Chrome"></label><button id="chooseChrome">选择…</button></div>
+<p class="hint">异常恢复会从头重放整个流程。请确保流程允许重复执行。连续 5 次健康检查后重置恢复计数。图像检查只判断所选画面，不代表业务心跳。</p>
+<div class="actions"><button id="saveConfig">保存配置</button><button id="start" class="primary">▶ 启动任务</button><button id="stop" class="danger" disabled>■ 停止全部实例</button></div></section>
+</div><div class="observability">
+<section class="watch-card"><span class="watch-orbit">◎</span><div><strong>持续观察，每一步都可追溯</strong><p>录制 → 并发回放 → 图像巡检 → 自动恢复</p></div></section>
+<section id="instancesPanel" class="card" hidden><h2>实例状态</h2><div id="instances"></div></section>
+<section class="card log-card"><div class="row spread"><h2>实时日志</h2><label class="inline"><input id="autoScroll" type="checkbox" checked> 跟随滚动</label></div><div id="logs" aria-live="polite"></div></section>
+</div></div></section></main>
+<dialog id="captureDialog"><div class="row spread"><div><h2 id="captureTitle">框选正常运行时必然出现的画面</h2><p class="hint">录制已暂停，请勿继续操作 Chrome。选取独特、静态的标志，保存或取消后恢复录制。</p></div><button id="cancelCapture" class="quiet">取消 ✕</button></div><div id="checkpointOptions" class="row" hidden><label>最长等待（秒）<input id="captureTimeout" type="number" min="1" max="600" value="60"></label><label>最低匹配率（%）<input id="captureThreshold" type="number" min="50" max="100" value="90"></label><p class="hint">没有检测到时持续等待，超时才触发恢复，随时可以停止。</p></div><div class="capture-wrap"><canvas id="captureCanvas"></canvas></div><div class="row spread"><span id="selectionInfo">尚未选择区域</span><button id="saveTrusted" class="primary" disabled>保存可信区域</button></div></dialog>
+<script src="app.js"></script></body></html>

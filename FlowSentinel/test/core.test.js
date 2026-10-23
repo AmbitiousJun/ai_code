@@ -1,0 +1,14 @@
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {PNG}=require('pngjs');
+const {crop,match}=require('../src/vision');
+const {config,sleep}=require('../src/engine');
+const {Store}=require('../src/store');
+const {expand,fieldId,fields,generateValues,validateRules}=require('../src/variables');
+const fs=require('fs'),os=require('os'),path=require('path');
+function picture(offset=0,blank=false){const p=new PNG({width:160,height:100});p.data.fill(255);if(!blank)for(let y=20;y<60;y++)for(let x=30;x<90;x++){const i=(y*160+x+offset)*4;p.data[i]=(x*17+y*7)%255;p.data[i+1]=(y*29)%255;p.data[i+2]=25;}return PNG.sync.write(p);}
+test('可信图像：精确匹配、位移容差、缺失判定',()=>{const rect={x:30,y:20,width:60,height:40};const ref=crop(picture(),rect);assert.equal(match(picture(),ref.buffer,rect,0).score,1);assert.equal(match(picture(7),ref.buffer,rect,12).score,1);assert.ok(match(picture(0,true),ref.buffer,rect,12).score<0.9);assert.throws(()=>crop(picture(),{x:150,y:0,width:30,height:30}));});
+test('配置校验拒绝负数、无穷、非整数并发',()=>{assert.throws(()=>config({count:1.5}));assert.throws(()=>config({interval:-1}));assert.throws(()=>config({radius:Infinity}));assert.equal(config({threshold:0.99}).threshold,0.99);});
+test('等待可被停止信号立即中断',async()=>{const c=new AbortController();const start=Date.now();const p=sleep(60000,c.signal);c.abort();await assert.rejects(p,/STOPPED/);assert.ok(Date.now()-start<1000);});
+test('字段模板支持整体随机、片段随机、多变量和严格校验',()=>{for(let i=0;i<50;i++){assert.match(expand('{{int:1000:9999}}'),/^\d{4}$/);assert.match(expand('user_{{digits:6}}_{{letters:4}}_{{instance}}@example.com',7),/^user_\d{6}_[a-z]{4}_7@example\.com$/);}assert.equal(expand('{{int:5:5}}'),'5');assert.match(expand('{{uuid}}'),/^[0-9a-f-]{36}$/);assert.throws(()=>expand('{{int:9:1}}'));assert.throws(()=>expand('{{digits:999}}'));assert.throws(()=>expand('{{wrong}}'));assert.throws(()=>expand('{{uuid}'));const step={type:'fill',selector:'#x',page:0,frame:[],value:'fixed'};const id=fieldId(step);const flow={steps:[step,step],variables:{[id]:{mode:'template',template:'{{uuid}}'}}};assert.equal(fields(flow).length,1);assert.equal(generateValues(flow,1).size,1);assert.throws(()=>validateRules(flow,{other:{mode:'template',template:'x'}}));});
+test('流程原子持久化、读取、删除和路径校验',()=>{const dir=fs.mkdtempSync(path.join(os.tmpdir(),'flow-store-test-'));try{const store=new Store(dir,{encryptString:s=>Buffer.from(s).reverse(),decryptString:b=>Buffer.from(b).reverse().toString()});const f=store.create('测试',{width:1280,height:720},{});f.steps.push({value:'secret-example'});store.save(f);assert.equal(store.get(f.id).steps[0].value,'secret-example');assert.ok(!fs.readFileSync(store.file(f.id)).includes('secret-example'));assert.equal(store.list().length,1);assert.throws(()=>store.get('../other'));store.delete(f.id);assert.equal(store.list().length,0);}finally{fs.rmSync(dir,{recursive:true,force:true});}});

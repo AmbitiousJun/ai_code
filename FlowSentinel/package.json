@@ -1,0 +1,45 @@
+{
+  "name": "flow-sentinel",
+  "version": "1.2.0",
+  "description": "FlowSentinel 浏览器流程录制与巡检",
+  "main": "src/main.js",
+  "author": "FlowSentinel",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/*.test.js",
+    "test:e2e": "node test/e2e.js",
+    "dist": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "playwright-core": "1.64.1",
+    "pngjs": "7.0.0"
+  },
+  "devDependencies": {
+    "electron": "45.0.0",
+    "electron-builder": "26.15.3",
+    "vue": "^3.5.44"
+  },
+  "build": {
+    "appId": "local.flowsentinel.desktop",
+    "productName": "FlowSentinel",
+    "asar": true,
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "signExecutable": false,
+      "icon": "src/ui/icon.ico"
+    },
+    "portable": {
+      "artifactName": "FlowSentinel-${version}-win-x64.exe"
+    }
+  }
+}

@@ -1,0 +1,58 @@
+const {_electron:electron}=require('playwright-core');
+const fs=require('fs'),path=require('path'),assert=require('node:assert/strict');
+const {fixture}=require('./fixture');const {randomUUID}=require('crypto');const {config,sleep}=require('../src/engine');
+(async()=>{
+ const data=path.resolve('test-results','ui-data-'+Date.now());fs.mkdirSync(data,{recursive:true});
+ const env={...process.env,FLOW_SENTINEL_TEST_DATA:data};delete env.ELECTRON_RUN_AS_NODE;
+ const packaged=process.argv.includes('--packaged');
+ const site=await fixture();
+ let app;
+ try{
+  app=await electron.launch({executablePath:packaged?path.resolve('dist/win-unpacked/FlowSentinel.exe'):require('electron'),args:packaged?[]:['.'],env,timeout:60000});
+  const page=await app.firstWindow();await page.waitForSelector('#record');
+  const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.screenshot({path:'test-results/gui-empty.png'});
+  await page.locator('#name').fill('界面验收 · 新建流程');
+  await page.locator('#record').click();await page.waitForFunction(()=>document.querySelector('#status').textContent.includes('录制中'));
+  await page.locator('#checkpoint').click();await page.locator('#captureDialog').waitFor({state:'visible'});
+  await page.locator('#captureTimeout').fill('25');
+  const box=await page.locator('#captureCanvas').boundingBox();
+  await page.mouse.move(box.x+40,box.y+40);await page.mouse.down();await page.mouse.move(box.x+110,box.y+110);await page.mouse.up();
+  await page.locator('#saveTrusted').click();await page.locator('#captureDialog').waitFor({state:'hidden'});
+  const checkpointResult=await page.evaluate(()=>window.flowAPI.call('list'));
+  assert.equal(checkpointResult.data[0].steps.filter(s=>s.type==='checkpoint').length,1);
+  assert.equal(checkpointResult.data[0].steps.find(s=>s.type==='checkpoint').timeout,25000);
+  await page.locator('#checkpoint').click();await page.locator('#captureDialog').waitFor({state:'visible'});
+  await page.keyboard.press('Escape');await page.locator('#captureDialog').waitFor({state:'hidden'});
+  await page.locator('#stopRecord').click();await page.waitForFunction(()=>document.querySelector('#status').textContent==='待机');
+  await page.locator('#count').fill('2');await page.locator('#saveConfig').click();
+  const result=await page.evaluate(()=>window.flowAPI.call('init'));
+  assert.equal(result.ok,true);assert.equal(result.data.flows[0].config.count,2);
+  const encrypted=fs.readFileSync(path.join(data,'flows',result.data.flows[0].id+'.flow'));
+  assert.ok(!encrypted.includes(Buffer.from('界面验收')));
+  assert.ok(await page.locator('#logs').textContent());
+  const flow=JSON.parse(fs.readFileSync('test-results/recorded-flow.json','utf8'));flow.id=randomUUID();flow.name='业务系统 · 登录与运行';flow.config=config({count:2,interval:2,grace:0,maxStepDelay:100});flow.updatedAt=new Date().toISOString();flow.steps.filter(s=>s.type==='goto').forEach(s=>s.url=site.url);
+  const encryptedFlow=await app.evaluate(({safeStorage},flow)=>safeStorage.encryptString(JSON.stringify(flow)).toString('base64'),flow);
+  fs.writeFileSync(path.join(data,'flows',flow.id+'.flow'),Buffer.from(encryptedFlow,'base64'));
+  await page.reload();await page.getByRole('button',{name:'业务系统 · 登录与运行',exact:false}).first().click();
+  // Templates already saved in the fixture must remain editable and survive GUI save.
+  assert.ok(await page.locator('.variable-field').count()>=4);
+  await page.locator('#saveConfig').click();await sleep(250);
+  const saved=await page.evaluate(()=>window.flowAPI.call('list'));
+  assert.equal(Object.keys(saved.data.find(x=>x.id===flow.id).variables).length,2);
+  await page.locator('#start').click();await page.waitForFunction(()=>document.querySelectorAll('.instance.good').length===2,{},{timeout:45000});
+  await page.locator('#notice').evaluate(el=>el.hidden=true);
+  await page.locator('.workspace').evaluate(el=>el.scrollTop=0);
+  await page.screenshot({path:packaged?'test-results/gui-packaged.png':'test-results/gui-recorded.png'});
+  await page.locator('#stopNow').click();await page.waitForFunction(()=>document.querySelector('#status').textContent==='待机');
+  const visualFlow=JSON.parse(fs.readFileSync('test-results/visual-flow.json','utf8'));visualFlow.id=randomUUID();visualFlow.config=config();visualFlow.updatedAt=new Date().toISOString();
+  const visualEncrypted=await app.evaluate(({safeStorage},f)=>safeStorage.encryptString(JSON.stringify(f)).toString('base64'),visualFlow);
+  fs.writeFileSync(path.join(data,'flows',visualFlow.id+'.flow'),Buffer.from(visualEncrypted,'base64'));
+  await page.reload();await page.getByRole('button',{name:'位移点击验收',exact:false}).click();
+  await page.waitForFunction(()=>document.querySelector('.click-preview')?.naturalWidth===48);
+  await page.screenshot({path:packaged?'test-results/visual-preview-packaged.png':'test-results/visual-preview.png'});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+  assert.deepEqual(errors,[]);
+  fs.writeFileSync(packaged?'test-results/packaged-report.txt':'test-results/ui-report.txt','PASS: Electron GUI launch, recording start/stop, config save, encrypted persistence, field templates, two headless replays through GUI, image monitoring, always-visible stop, logs, layout and no renderer exceptions\n');
+ }finally{await app?.close();await site.close();}
+})().catch(e=>{console.error(e);process.exitCode=1;});
