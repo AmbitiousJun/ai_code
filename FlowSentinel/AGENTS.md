@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.6**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.7**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在最终巡检异常时重建实例。
 
@@ -65,6 +65,8 @@ D:\ai_code\FlowSentinel\
 │   ├── repeat-clicks.js         每轮每实例的连续同点点击坐标复用与失效
 │   ├── capture.js               CDP 合成帧缓存与点击前截图兜底
 │   ├── recorder-script.js       注入每个文档的事件录制脚本
+│   ├── flow-transfer.js         .fs 交换封装、协议/最低版本校验、导入身份与重名规则
+│   ├── flow-schema.js           流程数据结构校验，与交换协议隔离
 │   ├── store.js                 流程对象的加密文件读写、列举与删除
 │   ├── variables.js             字段标识、模板校验、整字段和片段随机值生成
 │   ├── vision.js                PNG 裁剪与局部图像匹配
@@ -83,6 +85,8 @@ D:\ai_code\FlowSentinel\
 │   ├── capture-e2e.js           透明叠层、跨域污染 Canvas、低特征图像回归
 │   ├── visual.test.js           点击图像原位、位移、歧义、缺失、取消测试
 │   ├── visual-e2e.js            点击前采集、跨域 iframe、不同座位并发回放
+│   ├── transfer.test.js         交换协议、兼容与重名校验单元测试
+│   ├── transfer-smoke.js        源码版/解包版导入导出、重名与跨目录验收
 │   ├── core.test.js             图像、配置、取消等待、变量和 Store 单元测试
 │   ├── fixture.js               Vue 表单和跨源嵌套 iframe / Canvas 测试服务器
 │   ├── e2e.js                   真实 Chrome 录制、变量回放、双实例与恢复测试
@@ -92,7 +96,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.6-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.7-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -202,7 +206,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.6 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.7 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -435,3 +439,14 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 偏好保存于渲染进程 localStorage 的 flow-sentinel-theme，刷新与重启后恢复；非法值回退系统，存储不可用时支持会话内切换。不写入 Flow，不新增 IPC 或依赖。
 - Evidence → Finding → Path：theme.js 的偏好恢复与系统监听 → UI 独立管理外观 → 修改行为读 theme.js，修改浅色配色读 theme.css，入口读 index.html。theme-smoke.js 验证三态切换、模拟系统变化、刷新/重启持久化和布局。
 - 验证命令：node test/theme-smoke.js；打包后 node test/theme-smoke.js --packaged。进程架构和录制回放逻辑不变，目录树已补充两个 UI 文件和主题验收脚本。
+
+## 18. 1.2.7 流程导入导出
+
+- Evidence → Finding → Path：flow-transfer.js 的 encode/decode → 独立交换协议不依赖步骤类型或本机加密 → 协议改此模块；flow-schema.js 校验内部数据；main.js 协调文件对话框、待导入对象及 Store；ui/app.js 管理重命名交互。
+- .fs 为 UTF-8 JSON，封装 format=FlowSentinel、protocolVersion=1、minImporterVersion=1.2.7、exporterVersion 和完整 flow。128 MiB 上限。它是未加密的便携文件，包含表单原值和图片；导入后重新使用目标 Windows 用户的 safeStorage 加密。
+- 导出使用已保存流程，原生保存对话框默认 app.getPath('downloads')，允许修改目录；导入使用原生打开对话框。IPC 新增 exportFlow、prepareImport、confirmImport、cancelImport；录制/任务期间禁止导入导出。
+- prepareImport 校验封装和数据后仅在主进程内存保存待导入流程，向 GUI 返回名称和已有名称。确认前不落盘；取消或下次选文件清理待导入对象。确认时重新检查名称、生成 UUID、重置创建/更新时间，以新流程保存，不覆盖原流程。
+- 输入实时检查空白、80 字符和重名，重名比较去除首尾空白、NFKC 归一化并忽略大小写；主进程再次校验，避免绕过 UI。导入后选中新流程，不自动启动。
+- 同协议且达到最低导入版本时接收；较新的 exporterVersion 本身不造成拒绝。不兼容协议或未达到最低版本时拒绝并显示文件声明的最低导入版本。1.2.6 及以前没有导入入口，需要升级到 1.2.7。
+- 后续引入旧版无法理解的必需字段或步骤时，必须提高 MIN_VERSION；破坏封装兼容时提高 PROTOCOL，并为需支持的旧协议提供解码适配。不得只提高应用版本而漏改兼容声明。流程字段完整保留，数据结构校验集中在 flow-schema.js；本机 .flow 格式和 Store 不变。
+- 验证：npm test；node test/transfer-smoke.js；打包后 node test/transfer-smoke.js --packaged。对话框在自动测试中替换返回值，真实 Electron IPC、界面、加密 Store 均运行；跨机器以两个独立数据目录模拟。

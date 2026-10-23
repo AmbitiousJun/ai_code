@@ -2,6 +2,10 @@ const {app,BrowserWindow,ipcMain,dialog,shell,safeStorage}=require('electron');
 const path=require('path');
 const fs=require('fs');
 const {Store}=require('./store');
+const transfer=require('./flow-transfer');
+const {validateFlow}=require('./flow-schema');
+let pendingImport=null;
+function transferIdle(){if(recorder||runner||recordStarting)throw new Error('请先停止当前录制或任务');}
 const {Recorder,Runner,DEFAULTS,config,label}=require('./engine');
 const {fields,validateRules,expand}=require('./variables');
 let win,store,recorder,runner,recordStarting=false,closing=false;
@@ -28,6 +32,32 @@ async function command(action,data={}){
   switch(action){
     case 'init':return{flows:store.list().map(summary),defaults:DEFAULTS,logs,...status(),dataDir:dataDir()};
     case 'list':return store.list().map(summary);
+    case 'exportFlow':{
+      transferIdle();
+      const f=store.get(data.id),text=transfer.encode(validateFlow(f),app.getVersion());
+      const filename=(f.name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').replace(/[. ]+$/g,'').slice(0,80)||'流程')+'.fs';
+      const result=await dialog.showSaveDialog(win,{title:'导出流程（包含表单原值，请妥善保管）',defaultPath:path.join(app.getPath('downloads'),filename),filters:[{name:'FlowSentinel 流程',extensions:['fs']}]});
+      if(result.canceled||!result.filePath)return false;
+      await fs.promises.writeFile(result.filePath,text,'utf8');return true;
+    }
+    case 'prepareImport':{
+      transferIdle();pendingImport=null;
+      const result=await dialog.showOpenDialog(win,{title:'导入 FlowSentinel 流程',defaultPath:app.getPath('downloads'),properties:['openFile'],filters:[{name:'FlowSentinel 流程',extensions:['fs']}]});
+      if(result.canceled)return null;
+      transferIdle();
+      const file=result.filePaths[0];
+      if((await fs.promises.stat(file)).size>transfer.MAX_BYTES)throw new Error('流程文件超过 128 MiB 限制');
+      const flow=validateFlow(transfer.decode(await fs.promises.readFile(file,'utf8'),app.getVersion()));
+      // Validate renderer projection before accepting the pending import.
+      summary(flow);pendingImport=flow;
+      return {name:flow.name,names:store.list().map(f=>f.name)};
+    }
+    case 'cancelImport':pendingImport=null;return;
+    case 'confirmImport':{
+      transferIdle();if(!pendingImport)throw new Error('请重新选择导入文件');
+      const flow=transfer.importedFlow(pendingImport,data.name,store.list().map(f=>f.name));
+      const result=summary(flow);store.save(flow);pendingImport=null;return result;
+    }
     case 'record':{
       if(recorder||runner||recordStarting)throw new Error('请先停止当前录制或任务');
       const name=String(data.name||'').trim();if(!name)throw new Error('请填写流程名称');

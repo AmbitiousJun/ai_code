@@ -28,11 +28,12 @@ function renderDetail(){
   $('metricSteps').textContent=String(f?.steps.length||0).padStart(2,'0');
   renderVariables(f);
   $('flowTitle').textContent=f?f.name:'录一次，持续守护';$('flowInfo').textContent=f?f.viewport.width+' × '+f.viewport.height+' 固定视口 · 自动保存于本机':'打开独立 Chrome，录制表单、Canvas 与 iframe 操作。';
-  $('newPanel').hidden=!!f||state.recording;$('detailPanel').hidden=!f;$('deleteFlow').hidden=!f;
+  $('newPanel').hidden=!!f||state.recording;$('detailPanel').hidden=!f;$('deleteFlow').hidden=!f;$('exportFlow').hidden=!f;
   if(f){$('stepCount').textContent=f.steps.length+' 个步骤';$('steps').replaceChildren();f.steps.forEach(s=>{const div=document.createElement('div');div.textContent=String(s.index).padStart(2,'0')+'  '+s.label+(s.frameDepth?' · iframe 层级 '+s.frameDepth:'')+(s.page?' · 标签页 '+(s.page+1):'');if(s.visualImage){const img=document.createElement('img');img.src=s.visualImage;img.className='click-preview';img.alt='点击位置参考截图';img.title='点击前截图：原位置优先；唯一匹配时重定位；未找到或多个匹配时回退原坐标';div.append(img);}if(s.visualError){const warning=document.createElement('span');warning.className='click-warning';warning.textContent=' · '+s.visualError+'（回放时使用录制原坐标）';div.append(warning);}$('steps').append(div);});$('steps').scrollTop=$('steps').scrollHeight;$('trustedImage').hidden=!f.trusted;if(f.trusted)$('trustedImage').src=f.trusted.image;$('trustedInfo').textContent=f.trusted?f.trusted.rect.width+' × '+f.trusted.rect.height+' · 已保存基准图':'尚未设置可信区域';}
   updateControls();
 }
 function updateControls(){
+  $('importFlow').disabled=busy||state.running||state.recording;$('exportFlow').disabled=busy||state.running||state.recording||!selected;
   $('status').textContent=state.recording?'● 录制中':state.running?'● 执行与巡检中':'待机';$('recordPanel').hidden=!state.recording;
   $('stopNow').hidden=!state.recording&&!state.running;
   document.querySelectorAll('.variable-field select,.variable-field input').forEach(el=>el.disabled=state.recording||state.running);
@@ -95,3 +96,21 @@ window.flowAPI.onEvent(event=>{
   if(event.type==='states')renderStates(event.states);
 });
 task(async()=>{const data=await call('init');flows=data.flows;state=data;setConfig(data.defaults);data.logs.forEach(addLog);renderStates(data.states);renderList();renderDetail();});
+
+let importNames=[];
+function checkImportName(){
+  const name=$('importName').value.trim(),key=s=>s.trim().normalize('NFKC').toLowerCase();
+  const error=!name?'请填写流程名称':name.length>80?'流程名称不能超过 80 个字符':importNames.some(n=>key(n)===key(name))?'流程名称已存在，请调整名称':'';
+  $('importNameError').textContent=error;$('importName').setAttribute('aria-invalid',String(!!error));$('confirmImport').disabled=!!error;return !error;
+}
+$('importName').oninput=checkImportName;
+$('exportFlow').onclick=()=>task(async()=>{if(await call('exportFlow',{id:selected}))notice('流程已导出');});
+$('importFlow').onclick=()=>task(async()=>{const result=await call('prepareImport');if(!result)return;importNames=result.names;$('importName').value=result.name;checkImportName();$('importDialog').showModal();$('importName').select();});
+$('cancelImport').onclick=()=>task(async()=>{await call('cancelImport');$('importDialog').close();});
+$('importDialog').addEventListener('cancel',event=>{event.preventDefault();if(!busy)$('cancelImport').click();});
+$('confirmImport').onclick=()=>task(async()=>{
+  if(!checkImportName())return;
+  $('confirmImport').disabled=true;$('cancelImport').disabled=true;$('importName').disabled=true;
+  try{const flow=await call('confirmImport',{name:$('importName').value});selected=flow.id;setConfig(flow.config);upsert(flow);$('importDialog').close();notice('流程已导入');}
+  finally{$('cancelImport').disabled=false;$('importName').disabled=false;checkImportName();}
+});

@@ -137,3 +137,13 @@ node test/portable-smoke.js
 - npm run dist -- --config.electronDist=node_modules/electron/dist：成功。node test/portable-smoke.js：最终单文件 EXE 启动、真实 Chrome 录制、停止与加密保存通过。
 - 产物：dist/FlowSentinel-1.2.6-win-x64.exe，102937883 字节。SHA-256：3C543E6802AB3346D4DB0BC982D9F30F0585B11BA7A02DFBF82D22DCEF11BFFA。
 - 验证范围：使用独立测试数据，不操作用户已有流程；系统颜色切换通过 Playwright 媒体模拟验证，未修改 Windows 个人设置。本轮未重跑全部 Canvas 专项 E2E，录制回放核心代码无变更。
+
+## 1.2.7 流程交换验收（2026-10-23）
+
+- npm test：20/20 通过；之后新增完整字段往返用例，node --test test/transfer.test.js：5/5 通过。
+- node test/transfer-smoke.js 与 --packaged：通过。真实 Electron 界面/IPC/Windows 加密 Store 验证默认原名、实时重名、主进程二次拦截、修改名称、取消不落盘、新 UUID、默认下载目录、导出包含表单原值、两个独立数据目录往返以及新协议拒绝/最低版本提示。
+- 原生文件对话框在自动测试中替换返回值并核对参数；没有自动点击系统文件选择器。两个目录模拟另一处安装，未在第二台物理机器测试。
+- 交换单元测试覆盖损坏封装、不支持的数据版本/步骤、较新导出版本仍兼容、最低导入版本阻止、模板/参考图/检查点/自定义配置保留。
+- 初次沙箱内 Store 测试受临时目录重命名权限限制，沙箱外重跑通过。此次没有重跑全部游戏回放 E2E；录制、匹配和回放引擎未改动。
+
+- npm run dist：成功生成 dist/FlowSentinel-1.2.7-win-x64.exe（102869050 字节）。node test/portable-smoke.js：通过单文件解压启动、界面桥接、真实 Chrome 开始/停止录制及加密持久化。便携脚本的通用输出提到完整回放，但本轮仅执行上述测试，不将该文字作为本轮完整回放证据。
