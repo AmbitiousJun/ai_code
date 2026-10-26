@@ -13,7 +13,8 @@ function version(value){
 function older(a,b){const x=version(a),y=version(b);for(let i=0;i<3;i++){if(x[i]!==y[i])return x[i]<y[i];}return false;}
 function encode(flow,appVersion){
   version(appVersion);
-  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:flow.subflows?.some(s=>s.trigger?.type==='cron'&&s.trigger.expression.trim().split(/\s+/).length===6)?'1.3.2':flow.subflows?.length?'1.3.0':MIN_VERSION,exporterVersion:appVersion,flow});
+  if(flow.kind==='base')throw new Error('只能导出全流程');
+  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:flow.baseFlow?'1.4.0':flow.subflows?.some(s=>s.trigger?.type==='cron'&&s.trigger.expression.trim().split(/\s+/).length===6)?'1.3.2':flow.subflows?.length?'1.3.0':MIN_VERSION,exporterVersion:appVersion,flow});
   if(Buffer.byteLength(text)>MAX_BYTES)throw new Error('流程文件超过 128 MiB 限制');
   return text;
 }
@@ -24,6 +25,7 @@ function decode(text,appVersion){
   version(file.minImporterVersion);version(file.exporterVersion);
   if(!Number.isSafeInteger(file.protocolVersion)||file.protocolVersion<1)throw new Error('无效的流程协议版本');
   if(file.protocolVersion!==PROTOCOL||older(appVersion,file.minImporterVersion))throw new Error('流程协议不兼容，最低导入版本：FlowSentinel '+file.minImporterVersion+'；当前版本：'+appVersion);
+  if(file.flow?.kind==='base')throw new Error('只能导入全流程');
   return file.flow;
 }
 function nameError(name,names){

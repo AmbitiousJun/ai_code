@@ -220,3 +220,34 @@ node test/portable-smoke.js
 - npm run dist：成功；node test/portable-smoke.js：通过单文件解压启动、Chrome 录制/停止、IPC 和加密持久化。ASAR 中本次修改的三个生产文件与源码逐字节相同，包内版本为 1.3.3。
 - 产物：dist/FlowSentinel-1.3.3-win-x64.exe，102876090 字节；SHA-256：465088B696B680C1B8701C09B9AA3C341C62E71C1E37582E342497039779FC15。
 - 初次本地站点测试受沙箱网络限制、初次打包受下载限制，均在获准沙箱外执行后通过。未重跑全部 Canvas 图像与缓存恢复 E2E；本次未修改相关模块。README.md 和 AGENTS.md 已同步行为与维护路径，无新生产模块或依赖。
+
+## 1.4.0 基础流程（2026-10-26）
+
+- npm test：28 项通过，新增基础类型限制、嵌入前缀一致性、1.4.0 导入门槛及首次手动输入不覆盖基础步骤。首次沙箱运行的 Store 临时文件 rename 权限失败；在正常执行环境重跑通过。
+- node test/base-flows-ui.js：通过。真实 Electron/Chrome 验证基础分类、表单模板继承、固定视口、准备事件不重复录入、禁止单独巡检/子流程/截图/导出、携带基础快照导出、两种名称校验及新身份导入、准备期间停止。使用独立测试目录与本机 HTTP 夹具。
+- node test/e2e.js：通过。既有表单、iframe、Canvas、双实例、巡检恢复与停止回归。
+- node test/subflows-e2e.js：通过。既有子流程恢复、触发、隔离及停止回归。
+- node test/transfer-smoke.js：通过。旧全流程导入导出、重名、取消、跨目录与不兼容协议回归。
+- ASAR 内容核对：main.js、engine.js、ui/app.js、ui/style.css 与最终工作区内容一致。
+- npm run dist：成功生成 dist/FlowSentinel-1.4.0-win-x64.exe（102876009 字节）。
+- node test/base-flows-ui.js --packaged：通过，与源码版同一套基础流程场景，含准备期间停止。
+- node test/portable-smoke.js：通过，单文件 EXE 解压启动、真实 Chrome 录制、停止及加密持久化正常。
+
+## 1.4.1 界面样式与便携发布（2026-10-26）
+
+- 搜索框与流程分类增加 20px 间距，分类铺满侧栏且各占一半，以文字和下划线表示选中状态。
+- 创建录制的两个下拉框统一表单样式，已检查浅色、暗色截图；02 徽标保留背景，状态更新只修改标题文字。
+- npm test：28/28 通过。沙箱内文件持久化测试受权限限制，正常权限环境重跑通过。
+- node test/base-flows-ui.js 与 --packaged 均通过，覆盖基础录制、嵌入、分类、导入导出与停止。
+- npm run dist：成功生成 dist/FlowSentinel-1.4.1-win-x64.exe（102876281 字节）。初次沙箱构建无法解析 github.com，正常权限环境重跑成功。
+- node test/portable-smoke.js：最终生成的单文件 EXE 解压启动、Chrome 录制、停止与加密持久化通过。
+- 架构与源码目录结构不变；本次未重复执行全部图像匹配与恢复 E2E。
+
+## 1.4.2 基础流程执行配置（2026-10-26）
+
+- npm test：29/29 通过。沙箱默认临时目录的 Store 重命名受限，改用项目 test-results 作为 TEMP/TMP 后通过。
+- node test/base-flows-ui.js 及 --packaged：真实 Electron/Chrome 验证七项可见、其余隐藏、基础类型新建、全流程切换、嵌入回放、导入导出与停止准备通过。
+- test/base-flows.test.js：验证基础前缀覆盖、其余参数继承、进入全流程后续步骤恢复单步超时。
+- node test/e2e.js：真实 Chrome 录制、双实例回放、变量、巡检恢复及停止通过。
+- node test/checkpoint-e2e.js：检查点等待、超时阻断与停止通过。
+- npm run dist：成功生成 dist/FlowSentinel-1.4.2-win-x64.exe（102876150 字节）；沙箱下载网络受限后在正常环境构建成功。node test/portable-smoke.js 通过单文件解压启动、真实 Chrome 录制、停止与加密保存验收。

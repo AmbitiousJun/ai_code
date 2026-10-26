@@ -4,11 +4,12 @@ const fs=require('fs');
 const {Store}=require('./store');
 const transfer=require('./flow-transfer');
 const {validateFlow}=require('./flow-schema');
-const {SubflowSession}=require('./subflows');
+const {SubflowSession,executeSteps}=require('./subflows');
+const {sleep}=require('./engine');
 let subSession=null;
 let pendingImport=null;
 function transferIdle(){if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');}
-const {Recorder,Runner,DEFAULTS,config,label}=require('./engine');
+const {Recorder,Runner,DEFAULTS,config,baseConfig,label}=require('./engine');
 const {fields,validateRules,expand}=require('./variables');
 let win,store,recorder,runner,recordStarting=false,closing=false;
 let logs=[],states=[];
@@ -27,13 +28,13 @@ function log(level,message,image){
     fs.appendFileSync(file,JSON.stringify({time:entry.time,level,message})+'\n');
   }catch{}
 }
-function summary(flow){return {...flow,subflows:(flow.subflows||[]).map(sub=>({id:sub.id,name:sub.name,trigger:sub.trigger.type==='image'?{type:'image',trusted:{...sub.trigger.trusted,image:'data:image/png;base64,'+sub.trigger.trusted.image}}:sub.trigger,steps:sub.steps.map((step,i)=>({index:i+1,type:step.type,label:label(step),page:step.page||0}))})),config:config(flow.config),fields:fields(flow),steps:flow.steps.map((s,i)=>({index:i+1,type:s.type,label:label(s),frameDepth:s.frame?.length||0,page:s.page||0,timeout:s.timeout,visualImage:s.visual?'data:image/png;base64,'+s.visual.image:undefined,visualError:s.visualError,checkpointImage:s.type==='checkpoint'?'data:image/png;base64,'+s.trusted.image:undefined})),trusted:flow.trusted?{...flow.trusted,image:'data:image/png;base64,'+flow.trusted.image}:null};}
-function status(){return{recording:!!recorder||recordStarting||!!subSession,subPhase:subSession?.phase,subDraft:subSession?{steps:subSession.recorder?.flow.steps.map((s,i)=>({index:i+1,label:label(s)}))||[],defaultName:'子流程 '+((subSession.flow.subflows?.length||0)+1)}:null,running:!!runner,recordingId:subSession?.flow.id||recorder?.flow.id,states};}
+function summary(flow){return {...flow,baseFlow:flow.baseFlow?{id:flow.baseFlow.id,name:flow.baseFlow.name,stepCount:flow.baseFlow.steps.length}:undefined,subflows:(flow.subflows||[]).map(sub=>({id:sub.id,name:sub.name,trigger:sub.trigger.type==='image'?{type:'image',trusted:{...sub.trigger.trusted,image:'data:image/png;base64,'+sub.trigger.trusted.image}}:sub.trigger,steps:sub.steps.map((step,i)=>({index:i+1,type:step.type,label:label(step),page:step.page||0}))})),config:config(flow.config),fields:fields(flow),steps:flow.steps.map((s,i)=>({index:i+1,type:s.type,label:label(s),frameDepth:s.frame?.length||0,page:s.page||0,timeout:s.timeout,visualImage:s.visual?'data:image/png;base64,'+s.visual.image:undefined,visualError:s.visualError,checkpointImage:s.type==='checkpoint'?'data:image/png;base64,'+s.trusted.image:undefined})),trusted:flow.trusted?{...flow.trusted,image:'data:image/png;base64,'+flow.trusted.image}:null};}
+function status(){return{recording:!!recorder||recordStarting||!!subSession,preparing:recordStarting,subPhase:subSession?.phase,subDraft:subSession?{steps:subSession.recorder?.flow.steps.map((s,i)=>({index:i+1,label:label(s)}))||[],defaultName:'子流程 '+((subSession.flow.subflows?.length||0)+1)}:null,running:!!runner,recordingId:subSession?.flow.id||recorder?.flow.id,states};}
 function update(){emit({type:'status',...status()});}
 async function command(action,data={}){
   switch(action){
     case 'startSubflow':{
-      transferIdle();const session=new SubflowSession(store.get(data.id));subSession=session;
+      transferIdle();const source=store.get(data.id);if(source.kind==='base')throw new Error('基础流程不能录入子流程');const session=new SubflowSession(source);subSession=session;
       session.on('log',log);session.on('status',update);session.on('draft',update);
       session.on('closed',()=>{if(subSession===session){subSession=null;update();log('info','子流程录入浏览器已关闭，未保存草稿已丢弃');}});
       update();
@@ -76,29 +77,45 @@ async function command(action,data={}){
       const flow=validateFlow(transfer.decode(await fs.promises.readFile(file,'utf8'),app.getVersion()));
       // Validate renderer projection before accepting the pending import.
       summary(flow);pendingImport=flow;
-      return {name:flow.name,names:store.list().map(f=>f.name)};
+      return {name:flow.name,baseName:flow.baseFlow?.name,names:store.list().map(f=>f.name)};
     }
     case 'cancelImport':pendingImport=null;return;
     case 'confirmImport':{
       transferIdle();if(!pendingImport)throw new Error('请重新选择导入文件');
       const flow=transfer.importedFlow(pendingImport,data.name,store.list().map(f=>f.name));
-      const result=summary(flow);store.save(flow);pendingImport=null;return result;
+      if(flow.baseFlow)flow.baseFlow=transfer.importedFlow(flow.baseFlow,data.baseName,[...store.list().map(f=>f.name),flow.name]);
+      const result=summary(flow);store.save(flow);try{if(flow.baseFlow)store.save(flow.baseFlow);}catch(e){store.delete(flow.id);throw e;}pendingImport=null;return result;
     }
     case 'record':{
       if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');
       const name=String(data.name||'').trim();if(!name)throw new Error('请填写流程名称');
-      const viewport={width:Number(data.width)||1280,height:Number(data.height)||720};
+      const kind=data.kind||'full';if(!['full','base'].includes(kind))throw new Error('无效的流程类型');
+      const base=data.baseId?validateFlow(store.get(data.baseId)):null;
+      if(base&&(kind!=='full'||base.kind!=='base'||!base.steps.some(s=>s.type==='goto')))throw new Error('请选择包含网址步骤的基础流程');
+      const viewport=base?{...base.viewport}:{width:Number(data.width)||1280,height:Number(data.height)||720};
       if(viewport.width<640||viewport.width>3840||viewport.height<480||viewport.height>2160)throw new Error('视口范围：宽 640–3840，高 480–2160');
-      const cfg=config(data.config);recordStarting=true;update();
+      const cfg=config(kind==='base'?baseConfig(data.config):data.config);recordStarting=true;update();
       let flow;
       try{
-        flow=store.create(name,viewport,cfg);recorder=new Recorder(flow,cfg);
+        flow=store.create(name,viewport,cfg);flow.kind=kind;
+        if(base){flow.baseFlow=structuredClone(base);flow.steps=structuredClone(base.steps);flow.variables=structuredClone(base.variables||{});}
+        store.save(flow);recorder=new Recorder(flow,cfg);recorder.suppress=!!base;recorder.recordingFloor=flow.steps.length;recorder.preparation=new AbortController();
         const current=recorder;
         current.on('log',log);
         current.on('change',f=>{store.save(f);emit({type:'flow',flow:summary(f)});});
-        current.on('closed',async()=>{await current.queue;if(recorder===current){store.save(current.flow);recorder=null;update();log('info','录制浏览器已关闭，流程已自动保存');}});
-        await current.start();log('info','流程自动保存已开启');return summary(flow);
-      }catch(error){if(recorder)await recorder.stop();recorder=null;throw new Error('Chrome 启动失败，请确认已安装 Chrome，或选择 chrome.exe 路径');}
+        current.on('closed',async()=>{current.preparation.abort();await current.queue;if(recorder===current){store.save(current.flow);recorder=null;update();log('info','录制浏览器已关闭，流程已自动保存');}});
+        await current.start();
+        if(base){
+          log('info','正在回放基础流程，请等待完成后再操作 Chrome');
+          current.context.setDefaultTimeout(cfg.stepTimeout);current.context.setDefaultNavigationTimeout(cfg.stepTimeout);
+          await executeSteps(base,current.pages,cfg,current.preparation.signal,log);
+          await sleep(cfg.grace*1000,current.preparation.signal);
+          await Promise.allSettled([...current.pages.values()].flatMap(p=>p.frames().map(f=>f.evaluate(()=>{window.__flowRecorderPause?.(true);return window.__flowFlush?.();}))));
+          await current.queue;if(current.stopped)throw new Error('录制已停止');
+          await current.resumeCapture();log('info','基础流程回放完成，现在可以继续录制');
+        }
+        log('info','流程自动保存已开启');return summary(flow);
+      }catch(error){if(recorder)await recorder.stop();recorder=null;throw new Error(base?'基础流程回放未完成，录制已停止；请检查步骤、目标页面或超时配置':'Chrome 启动失败，请检查 Chrome 路径');}
       finally{recordStarting=false;update();}
     }
     case 'stopRecord':{
@@ -108,25 +125,28 @@ async function command(action,data={}){
     case 'snapshot':{
       if(subSession){if(!['condition','recording'].includes(subSession.phase))throw new Error('当前不能截图');return 'data:image/png;base64,'+(await subSession.recorder.snapshot()).toString('base64');}
       if(!recorder)throw new Error('请先开始录制');
+      if(recordStarting||recorder.flow.kind==='base')throw new Error('基础流程或准备阶段不能录制可信截图');
       return 'data:image/png;base64,'+(await recorder.snapshot()).toString('base64');
     }
     case 'trusted':{
       if(!recorder)throw new Error('请先开始录制');
+      if(recordStarting||recorder.flow.kind==='base')throw new Error('基础流程或准备阶段不能录制可信截图');
       recorder.setTrusted(data);await recorder.resumeCapture();return summary(recorder.flow);
     }
     case 'checkpoint':{
       if(subSession){if(subSession.phase!=='recording')throw new Error('请先录制动作');subSession.recorder.setCheckpoint(data.rect,data);await subSession.recorder.resumeCapture();return;}
       if(!recorder)throw new Error('请先开始录制');
+      if(recordStarting||recorder.flow.kind==='base')throw new Error('基础流程或准备阶段不能录制可信截图');
       recorder.setCheckpoint(data.rect,{timeout:data.timeout,threshold:data.threshold});await recorder.resumeCapture();return summary(recorder.flow);
     }
-    case 'cancelCapture':if(subSession){const r=subSession.recorder;await r.resumeCapture();if(subSession.phase!=='recording')await subSession.pause();}else await recorder?.resumeCapture();return;
+    case 'cancelCapture':if(recordStarting)return;if(subSession){const r=subSession.recorder;await r.resumeCapture();if(subSession.phase!=='recording')await subSession.pause();}else await recorder?.resumeCapture();return;
     case 'config':{
       if(recorder||runner||recordStarting||subSession)throw new Error('请停止后再修改配置');
-      const f=store.get(data.id);f.config=config(data.config);f.variables=validateRules(f,data.variables);store.save(f);return summary(f);
+      const f=store.get(data.id);f.config=config(f.kind==='base'?baseConfig(data.config):data.config);f.variables=validateRules(f,data.variables);store.save(f);return summary(f);
     }
     case 'start':{
       if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');
-      const f=store.get(data.id);f.config=config(data.config);f.variables=validateRules(f,data.variables);
+      const f=store.get(data.id);if(f.kind==='base')throw new Error('基础流程不能独立启动巡检');f.config=config(data.config);f.variables=validateRules(f,data.variables);
       if(!f.steps.some(s=>s.type==='goto')||!f.trusted)throw new Error('流程需要至少一个网址和一个可信截图区域');
       store.save(f);states=[];
       const run=new Runner(f,f.config,path.join(dataDir(),'evidence',f.id));runner=run;

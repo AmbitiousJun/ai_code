@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-26。对应版本：`package.json` 中的 **1.3.3**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-26。对应版本：`package.json` 中的 **1.4.2**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -81,6 +81,8 @@ D:\ai_code\FlowSentinel\
 │       ├── icon.png             主窗口 PNG 图标
 │       └── icon.ico             Windows 打包图标
 ├── test/
+│   ├── base-flows.test.js       基础流程限制、嵌入前缀不可变及交换版本测试
+│   ├── base-flows-ui.js         真实 Chrome 基础模板回放、分类、导入导出与打包验收
 │   ├── subflows.test.js         crontab 与子流程协议校验
 │   ├── subflows-e2e.js          真实 Chrome 恢复、触发、隔离、停止和重试验收
 │   ├── subflows-ui.js           源码版及解包版子流程 GUI 验收
@@ -103,7 +105,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.3.3-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.4.2-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -509,3 +511,27 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 无新模块、依赖、IPC 或数据字段，源码目录树不变。回归路径：test/subflows-e2e.js 验证页面身份、画面状态保留及准备动作隔离；test/subflows-ui.js 验证真实按钮、截图取消和保存；发布产物为 dist/FlowSentinel-1.3.3-win-x64.exe。
 
 - 连续录入保留旧弹出页；save() 将本次新增页编号转换为从 pageBase 开始的局部编号，同时转换检查点页号。直接引用录制开始前已有的额外标签页会提示重新录入打开动作，防止保存不可独立回放的步骤。
+
+## 25. 1.4.0 基础流程与嵌入录制
+
+- Evidence → Finding → Path：main.js/record 深拷贝基础流程到 baseFlow，并复制其 steps 和 variables 到全流程 → 基础步骤成为主流程固定前缀，已有 Runner 与 SubflowSession 自动从第一步完整回放 → 修改录制协调读 main.js，执行复用 subflows.js/executeSteps。无新增生产模块或依赖。
+- Flow 新增 kind（base/full；缺省为旧版全流程）与可选 baseFlow。基础流程禁止子流程、可信截图、检查点和继续嵌入；不能单独巡检或独立导入导出。全流程保存基础快照，不依赖基础原件后续修改或删除。
+- 嵌入沿用基础视口和表单模板，执行配置继承规则见第 27 节。Recorder.suppress 在准备期间丢弃采集，回放成功并等待 grace 后排空页面事件，再开放录制。recordingFloor 防止首次手动填写或滚动归并覆盖基础前缀。停止取消 preparation AbortController；失败关闭浏览器并保留未完成草稿。准备期间请勿手动操作 Chrome。
+- 全流程 steps 已包含基础前缀，运行时不再额外执行 baseFlow，避免重复。全流程表单模板可独立调整；基础快照保留嵌入时原配置。summary 只投影基础名称、ID 与步数，不泄露其原始表单值。
+- flow-schema.js 校验类型、禁止嵌套及前缀/视口一致；flow-transfer.js 对内嵌基础流程声明最低导入版本 1.4.0。确认导入要求全流程和基础流程分别提供不冲突的名称，重新生成两个 ID，基础副本保存到基础分类；取消不落盘。基础保存失败时撤销新全流程文件。
+- UI 左侧水平全流程/基础流程分类，创建时可选类型与基础来源；导入对话框追加基础名称。基础流程隐藏截图、子流程、导出与运行入口，主进程同时拒绝相关命令。
+- 验证入口：npm test；node test/base-flows-ui.js；node test/base-flows-ui.js --packaged。分发产物：dist/FlowSentinel-1.4.0-win-x64.exe。
+
+## 26. 1.4.1 界面样式修复
+
+- 左侧流程分类使用等宽、铺满侧栏的下划线导航，与搜索框间隔 20px；创建录制的两个下拉框复用定时控件样式，适配浅暗主题。维护路径：ui/index.html、ui/style.css、ui/theme.css。
+- ui/app.js/updateControls 只更新 detailTitle，保留 02 的 step-number 徽标，避免状态刷新清除数字背景。
+- 无新增模块、依赖、IPC 或流程字段，技术架构与源码目录结构不变；发布产物为 dist/FlowSentinel-1.4.1-win-x64.exe。
+
+## 27. 1.4.2 基础流程执行配置
+
+- UI 的 updateControls 同时处理创建类型和已选流程类型：基础流程标题为“执行配置”，仅显示 threshold、radius、stepTimeout、maxStepDelay、actionInterval、checkpointTimeout、ignoreRecordedDelays；其余控件及巡检提示隐藏，全流程保留完整配置。
+- Evidence → Finding → Path：engine.js/baseConfig 白名单提取七项，stepConfig 按基础前缀边界合并全流程配置 → 基础段覆盖七项，其余参数继承所属全流程 → Runner.run 和 subflows.js/executeSteps 共用，覆盖准备录制、正常回放、恢复与子流程录入前恢复。每步设置页面操作/导航超时，结束后恢复全流程超时。
+- main.js 在创建、保存基础流程时将白名单以外的配置归为默认值；独立录制基础流程使用默认 Chrome 参数。嵌入快照不随基础原件后续修改变化，旧快照中的七项设置也按当前继承规则生效。
+- 基础流程仍禁止检查点和独立巡检；保留匹配率、位置容差、检查点默认超时控件不改变 Canvas 点击匹配算法或全流程最终巡检配置。
+- 无新增模块、依赖、IPC 或数据字段，源码目录树不变。验证入口：npm test、test/base-flows-ui.js（支持 --packaged）、test/portable-smoke.js。分发产物为 dist/FlowSentinel-1.4.2-win-x64.exe。

@@ -40,7 +40,7 @@ test('scheduler deduplicates seconds and retries failures across recovery',async
   const {config}=require('../src/engine');
   const RealDate=Date;let time=+new RealDate(2026,9,26,9,15,20),clicks=0,fail=false;
   global.Date=class extends RealDate{constructor(...args){super(...(args.length?args:[time]));}static now(){return time;}};
-  const page={mainFrame:()=>page,isClosed:()=>false,context:()=>null,locator:()=>({click:async()=>{if(fail)throw Error('failure');clicks++;}})};
+  const page={setDefaultTimeout:()=>{},setDefaultNavigationTimeout:()=>{},mainFrame:()=>page,isClosed:()=>false,context:()=>null,locator:()=>({click:async()=>{if(fail)throw Error('failure');clicks++;}})};
   const sub={id:'s',name:'seconds',trigger:{type:'cron',expression:'* * * * * *'},steps:[{type:'click',selector:'#go'}]};
   const scheduler=new SubflowScheduler([sub]),pages=new Map([[0,page]]),cfg=config({actionInterval:0});
   const tick=()=>scheduler.tick(pages,cfg,new AbortController().signal,()=>{});

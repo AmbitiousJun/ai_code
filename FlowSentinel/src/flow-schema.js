@@ -10,6 +10,13 @@ function validateFlow(f){
   requireValue(object(f));
   if(f.version!==1)throw new Error('不支持的流程数据版本；请使用文件声明的最低导入版本或更新版本');
   requireValue(typeof f.name==='string'&&object(f.viewport)&&Number.isInteger(f.viewport.width)&&Number.isInteger(f.viewport.height)&&f.viewport.width>=640&&f.viewport.width<=3840&&f.viewport.height>=480&&f.viewport.height<=2160&&Array.isArray(f.steps)&&object(f.config));
+  requireValue(f.kind===undefined||['base','full'].includes(f.kind));
+  if(f.kind==='base')requireValue(!f.trusted&&!f.subflows?.length&&!f.baseFlow&&!f.steps.some(s=>s.type==='checkpoint'));
+  if(f.baseFlow!==undefined){
+    requireValue(object(f.baseFlow)&&f.baseFlow.kind==='base'&&!f.baseFlow.baseFlow);validateFlow(f.baseFlow);
+    requireValue(f.viewport.width===f.baseFlow.viewport.width&&f.viewport.height===f.baseFlow.viewport.height&&f.steps.length>=f.baseFlow.steps.length);
+    requireValue(JSON.stringify(f.steps.slice(0,f.baseFlow.steps.length))===JSON.stringify(f.baseFlow.steps));
+  }
   config(f.config);
   if(f.trusted!=null)image(f.trusted);
   for(const s of f.steps){

@@ -1,6 +1,6 @@
 const {EventEmitter}=require('events');
 const {randomUUID}=require('crypto');
-const {Recorder,config,sleep,replayStep,waitForCheckpoint,label}=require('./engine');
+const {Recorder,config,stepConfig,sleep,replayStep,waitForCheckpoint,label}=require('./engine');
 const {RepeatClicks}=require('./repeat-clicks');
 const {generateValues,fieldId}=require('./variables');
 const {match,crop}=require('./vision');
@@ -9,16 +9,18 @@ const {parseCron,cronMatches,cronSlot}=require('./cron');
 async function executeSteps(flow,pages,cfg,signal,log=()=>{},instance=1) {
   const repeats=new RepeatClicks(),values=generateValues(flow,instance);
   try{for(let i=0;i<flow.steps.length;i++){
+    const actionCfg=stepConfig(flow,i,cfg);
     let step=flow.steps[i];
     if(step.type==='fill'&&values.has(fieldId(step)))step={...step,value:values.get(fieldId(step))};
-    await sleep(cfg.ignoreRecordedDelays?cfg.actionInterval:Math.min(step.delay||0,cfg.maxStepDelay),signal);
-    const deadline=Date.now()+cfg.stepTimeout;
+    await sleep(actionCfg.ignoreRecordedDelays?actionCfg.actionInterval:Math.min(step.delay||0,actionCfg.maxStepDelay),signal);
+    const deadline=Date.now()+actionCfg.stepTimeout;
     while(!pages.has(step.page||0)&&Date.now()<deadline)await sleep(100,signal);
     const page=pages.get(step.page||0);if(!page||page.isClosed())throw new Error('子流程目标标签页未出现或已关闭');
+    page.setDefaultTimeout(actionCfg.stepTimeout);page.setDefaultNavigationTimeout(actionCfg.stepTimeout);
     log('info','#'+(i+1)+' '+label(step));
-    if(step.type==='checkpoint'){await repeats.clear();await waitForCheckpoint(page,step,cfg,signal);}
+    if(step.type==='checkpoint'){await repeats.clear();await waitForCheckpoint(page,step,actionCfg,signal);}
     else await replayStep(page,step,signal,(m,l='info')=>log(l,m),repeats);
-  }}finally{await repeats.clear();}
+  }}finally{for(const page of pages.values()){page.setDefaultTimeout(cfg.stepTimeout);page.setDefaultNavigationTimeout(cfg.stepTimeout);}await repeats.clear();}
 }
 
 class SubflowSession extends EventEmitter {

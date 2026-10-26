@@ -19,6 +19,14 @@ function config(input = {}) {
   }
   return out;
 }
+const BASE_CONFIG_KEYS=['threshold','radius','stepTimeout','maxStepDelay','actionInterval','checkpointTimeout','ignoreRecordedDelays'];
+function baseConfig(input={}) {
+  return Object.fromEntries(BASE_CONFIG_KEYS.filter(k=>input[k]!==undefined).map(k=>[k,input[k]]));
+}
+function stepConfig(flow,index,cfg) {
+  const base=flow.kind==='base'?flow:index<(flow.baseFlow?.steps.length||0)?flow.baseFlow:null;
+  return base?config({...cfg,...baseConfig(base.config)}):cfg;
+}
 function launchOptions(cfg, headless) {
   const args = [];
   if (cfg.mute) args.push('--mute-audio');
@@ -123,7 +131,7 @@ class Recorder extends EventEmitter {
   append(data) {
     const at=data.at||Date.now();delete data.at;
     const last=this.flow.steps.at(-1);
-    const same=last&&last.page===data.page&&last.selector===data.selector&&JSON.stringify(last.frame)===JSON.stringify(data.frame);
+    const same=this.flow.steps.length>(this.recordingFloor||0)&&last&&last.page===data.page&&last.selector===data.selector&&JSON.stringify(last.frame)===JSON.stringify(data.frame);
     if(same && last.type==='click' && data.type==='click' && data.count===2) Object.assign(last,data);
     else if(same && last.type===data.type && ['fill','scroll'].includes(data.type)) Object.assign(last,data);
     else {
@@ -171,6 +179,7 @@ class Recorder extends EventEmitter {
     return step;
   }
   async stop() {
+    this.preparation?.abort();
     if(!this.stopped) {
       await sleep(180);
       await Promise.allSettled([...this.pages.values()].flatMap(p=>p.frames().map(f=>f.evaluate(()=>window.__flowFlush?.()))));
@@ -319,27 +328,30 @@ class Runner extends EventEmitter {
           pageReady=true;
           const values=generateValues(this.flow,id);
           for(let i=0;i<this.flow.steps.length;i++) {
+            const actionCfg=stepConfig(this.flow,i,cfg);
             let step=this.flow.steps[i];
             if(step.type==='fill'&&values.has(fieldId(step)))step={...step,value:values.get(fieldId(step))};
-            await sleep(cfg.ignoreRecordedDelays?cfg.actionInterval:Math.min(step.delay||0,cfg.maxStepDelay),signal);
+            await sleep(actionCfg.ignoreRecordedDelays?actionCfg.actionInterval:Math.min(step.delay||0,actionCfg.maxStepDelay),signal);
             currentStep=i+1;
             this.state(id,'回放 '+(i+1)+' / '+this.flow.steps.length);
             this.log(id,'info','#'+(i+1)+' '+label(step));
-            const deadline=Date.now()+cfg.stepTimeout;
+            const deadline=Date.now()+actionCfg.stepTimeout;
             while(!pages.has(step.page||0)&&Date.now()<deadline)await sleep(100,signal);
             const page=pages.get(step.page||0);if(!page)throw new Error('弹出标签页未出现');
+            page.setDefaultTimeout(actionCfg.stepTimeout);page.setDefaultNavigationTimeout(actionCfg.stepTimeout);
             currentPage=page;
             if(step.type==='checkpoint') {
               await repeats.clear();
               this.state(id,'等待检查点 #'+(i+1));
               let lastLog=0;
-              await waitForCheckpoint(page,step,cfg,signal,score=>{
+              await waitForCheckpoint(page,step,actionCfg,signal,score=>{
                 this.state(id,'等待检查点 #'+(i+1),{checkpointScore:score});
                 if(Date.now()-lastLog>3000){this.log(id,'info','检查点 #'+(i+1)+' 匹配 '+(score*100).toFixed(1)+'%，等待达到 '+((step.threshold??cfg.threshold)*100).toFixed(0)+'%');lastLog=Date.now();}
               });
               this.log(id,'info','检查点 #'+(i+1)+' 已通过，继续执行');
             } else await replayStep(page,step,signal,(message,level='info')=>this.log(id,level,message),repeats);
           }
+          for(const page of pages.values()){page.setDefaultTimeout(cfg.stepTimeout);page.setDefaultNavigationTimeout(cfg.stepTimeout);}
           this.state(id,'等待页面稳定');await sleep(cfg.grace*1000,signal);
           if(this.flow.subflows?.length)await waitForCheckpoint(pages.get(this.flow.trusted.page||0),{trusted:this.flow.trusted},cfg,signal);
           let failures=0,healthy=0,nextInspection=0,nextSubflowCheck=0;
@@ -406,4 +418,4 @@ class Runner extends EventEmitter {
     }
   }
 }
-module.exports={DEFAULTS,config,Recorder,Runner,replayStep,resolveFrame,framePath,sleep,launchOptions,label,waitForCheckpoint};
+module.exports={DEFAULTS,config,baseConfig,stepConfig,Recorder,Runner,replayStep,resolveFrame,framePath,sleep,launchOptions,label,waitForCheckpoint};
