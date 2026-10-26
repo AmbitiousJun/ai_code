@@ -289,23 +289,31 @@ class Runner extends EventEmitter {
   }
   async run(id) {
     const signal=this.controller.signal,cfg=this.cfg;
-    let attempts=0,browser,currentPage,currentStep=0,repeats;
+    let attempts=0,browser,context,onPage,currentPage,currentStep=0,repeats;
     this.state(id,'等待启动',{recoveries:0});
     try {
       await sleep((id-1)*350,signal);
       while(!signal.aborted) {
+        let pageReady=false;
         try {
           repeats=new RepeatClicks();
+          currentPage=null;currentStep=0;
           this.state(id,attempts?'恢复中':'启动中',{recoveries:attempts});
-          browser=await chromium.launch(launchOptions(cfg,cfg.headless));this.browsers.add(browser);check(signal);
-          const context=await browser.newContext({viewport:this.flow.viewport,deviceScaleFactor:1,locale:'zh-CN'});
+          if(!browser?.isConnected()||!context||!browser.contexts().includes(context)) {
+            if(browser){this.browsers.delete(browser);await browser.close().catch(()=>{});}
+            context=null;check(signal);
+            browser=await chromium.launch(launchOptions(cfg,cfg.headless));this.browsers.add(browser);check(signal);
+            context=await browser.newContext({viewport:this.flow.viewport,deviceScaleFactor:1,locale:'zh-CN'});
+          }
           context.setDefaultTimeout(cfg.stepTimeout);context.setDefaultNavigationTimeout(cfg.stepTimeout);
           const pages=new Map();let nextId=0;
-          context.on('page',p=>{
+          onPage=p=>{
             pages.set(nextId++,p);
             p.on('dialog',d=>{this.log(id,'warn','自动关闭浏览器对话框');d.dismiss().catch(()=>{});});
-          });
+          };
+          context.on('page',onPage);
           await context.newPage();
+          pageReady=true;
           const values=generateValues(this.flow,id);
           for(let i=0;i<this.flow.steps.length;i++) {
             let step=this.flow.steps[i];
@@ -358,10 +366,21 @@ class Runner extends EventEmitter {
           this.log(id,'error','#'+currentStep+' '+reason);
           if(attempts>=cfg.retries){this.state(id,'需要人工处理');this.log(id,'error','已达到恢复上限，请停止任务并检查流程');break;}
           attempts++;this.state(id,'准备恢复',{recoveries:attempts});
-          this.log(id,'warn','第 '+attempts+' 次恢复：重建浏览器并从头回放');
+          this.log(id,'warn','第 '+attempts+' 次恢复：关闭旧标签页并从头回放，保留实例缓存；浏览器不可用时重新启动');
         } finally {
           await repeats?.clear();
-          if(browser){this.browsers.delete(browser);await browser.close().catch(()=>{});browser=null;}
+          if(context&&onPage)context.off('page',onPage);
+          onPage=null;
+          // Keep the BrowserContext (and its HTTP cache) across recovery rounds.
+          // Close every page, including popups, without running beforeunload handlers.
+          if(context) {
+            const closed=await Promise.allSettled(context.pages().map(p=>p.close({runBeforeUnload:false})));
+            if(closed.some(r=>r.status==='rejected')) {
+              this.log(id,'warn','旧标签页清理失败，下轮重新启动浏览器');
+              context=null;
+            }
+          }
+          if(!pageReady)context=null;
         }
         await sleep(Math.min(30000,attempts*2000),signal);
       }

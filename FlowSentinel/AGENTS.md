@@ -1,8 +1,8 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-23。对应版本：`package.json` 中的 **1.2.7**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-26。对应版本：`package.json` 中的 **1.2.8**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
-FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在最终巡检异常时重建实例。
+FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
 ## 1. 技术栈与进程边界
 
@@ -90,13 +90,14 @@ D:\ai_code\FlowSentinel\
 │   ├── core.test.js             图像、配置、取消等待、变量和 Store 单元测试
 │   ├── fixture.js               Vue 表单和跨源嵌套 iframe / Canvas 测试服务器
 │   ├── e2e.js                   真实 Chrome 录制、变量回放、双实例与恢复测试
+│   ├── cache-e2e.js             恢复缓存命中、实例隔离、标签页清理与重启兜底验收
 │   ├── checkpoint-e2e.js        检查点等待、忽略停顿、超时阻断与停止测试
 │   ├── ui-smoke.js              源码版及解包版 Electron GUI 验收
 │   ├── theme-smoke.js           三态主题、系统变化、刷新与重启验收
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.7-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.8-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -162,7 +163,7 @@ Canvas 保存元素选择器及相对元素边框归一化的 `{x, y, t}` 轨迹
 ```mermaid
 flowchart TD
     Start["启动任务，校验导航步骤和最终可信图"] --> Parallel["为每个实例启动独立执行循环"]
-    Parallel --> Browser["新建 Chrome 和 Context，生成本轮字段值"]
+    Parallel --> Browser["复用可用 Chrome 和 Context，否则新建；生成本轮字段值"]
     Browser --> Next["取得下一步骤，按配置等待"]
     Next --> Kind{"是否为截图检查点？"}
     Kind -->|否| Action["定位页面和frame，执行DOM或Canvas操作"]
@@ -183,7 +184,7 @@ flowchart TD
     Interval --> Monitor
     Limit -->|是| Fail
     Fail --> Retry{"尚有恢复次数？"}
-    Retry -->|是| Close["关闭该实例，退避后从头回放"]
+    Retry -->|是| Close["关闭旧标签页，保留上下文缓存，退避后从头回放"]
     Close --> Browser
     Retry -->|否| Manual["需要人工处理"]
     Stop["用户点击停止"] --> Abort["AbortController取消等待，关闭任务浏览器"]
@@ -195,7 +196,7 @@ flowchart TD
 - 普通 DOM 操作使用 Playwright 的元素等待。Canvas 可见只表示元素可操作；业务内容就绪需要显式截图检查点。
 - 检查点每轮截图匹配后最多睡眠 500 毫秒；实际周期还包括截图和计算耗时。当前一次匹配达标就放行，不要求连续多帧成功。超时不会执行下一步骤，而是进入恢复分支。
 - 最终巡检在全部步骤完成、等待 `grace` 后开始。匹配成功清空连续失败计数，失败则累加；达到 `failures` 才触发图像异常恢复。页面关闭或执行异常可以直接触发恢复。
-- 恢复关闭当前浏览器，从第一步重新执行；退避时间为 `min(30000, attempts * 2000)` 毫秒。连续五次巡检健康后内部恢复计数归零；达到恢复上限后该实例转为“需要人工处理”，其他实例继续运行。
+- 恢复关闭当前实例全部旧标签页，保留浏览器和 BrowserContext，从新标签页第一步重新执行；浏览器或上下文不可用时才重启；退避时间为 `min(30000, attempts * 2000)` 毫秒。连续五次巡检健康后内部恢复计数归零；达到恢复上限后该实例转为“需要人工处理”，其他实例继续运行。
 - `Runner.stop()` 发出取消信号并关闭自身维护的浏览器集合，随后等待所有实例结束。关闭主窗口也会清理录制与执行浏览器。
 
 ## 5. 流程数据与随机字段模型
@@ -206,7 +207,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.7 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.8 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -357,7 +358,7 @@ node test/portable-smoke.js
 | --- | --- | --- |
 | `main.js` 的 BrowserWindow、IPC handler 与 `command()` | GUI 和系统操作通过受限 IPC 分离 | 先读 main，再读 preload 和 ui/app |
 | `engine.js` 的 `Recorder.start/append/snapshot` | 注入采集、事件归并、框选暂停和自动保存事件协同 | 结合 recorder-script 和 Store 阅读 |
-| `Runner.run()` 中每轮 `chromium.launch()` 与 `generateValues()` | 并发实例隔离，恢复重建浏览器并重新生成字段值 | 结合 variables 和恢复分支阅读 |
+| `Runner.run()` 中条件式 `chromium.launch()` 与每轮 `generateValues()` | 并发实例隔离，恢复优先复用上下文缓存并重新生成字段值 | 结合 variables 和恢复分支阅读 |
 | `waitForCheckpoint()` 与 `vision.match()` | 用局部模板匹配等待画面，不依赖录制停顿判断就绪 | 结合 checkpoint-e2e 验证超时和停止 |
 | `Store.save()` 与主进程 `safeStorage` 注入 | 流程整体加密后落盘，数据独立于源码 | 结合 README 的数据目录说明阅读 |
 
@@ -450,3 +451,11 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 同协议且达到最低导入版本时接收；较新的 exporterVersion 本身不造成拒绝。不兼容协议或未达到最低版本时拒绝并显示文件声明的最低导入版本。1.2.6 及以前没有导入入口，需要升级到 1.2.7。
 - 后续引入旧版无法理解的必需字段或步骤时，必须提高 MIN_VERSION；破坏封装兼容时提高 PROTOCOL，并为需支持的旧协议提供解码适配。不得只提高应用版本而漏改兼容声明。流程字段完整保留，数据结构校验集中在 flow-schema.js；本机 .flow 格式和 Store 不变。
 - 验证：npm test；node test/transfer-smoke.js；打包后 node test/transfer-smoke.js --packaged。对话框在自动测试中替换返回值，真实 Electron IPC、界面、加密 Store 均运行；跨机器以两个独立数据目录模拟。
+
+## 19. 1.2.8 恢复时保留实例缓存
+
+- Evidence → Finding → Path：engine.js/Runner.run() 将 browser/context 生命周期提升到实例循环外，逐轮移除 page 监听器并关闭所有旧页 → 浏览器可用时复用同一上下文 HTTP 缓存，page 编号每轮从 0 开始 → 恢复与清理行为维护于 engine.js；缓存请求计数和失效兜底验证于 test/cache-e2e.js。
+- 自动恢复不清理 Cookie、localStorage、IndexedDB 等上下文数据；sessionStorage 随页面关闭释放。登录态可能保留，流程需兼容已有登录态。随机字段和 RepeatClicks 仍每轮重新建立，不同实例不共享缓存或会话。
+- 旧页（包括弹出页）关闭时不触发 beforeunload。关闭失败、首个新页面创建失败、上下文关闭或浏览器断开时，下轮重启浏览器。停止、退出和达到恢复上限时最终关闭实例，缓存不跨任务持久化。
+- 遵循网站 HTTP 缓存策略，不保证 no-store、过期或已淘汰资源命中；不读取用户日常 Chrome 配置，不实现跨进程共享缓存。无新增生产模块、依赖、IPC 或流程字段，旧流程无需重录。
+- 验证命令：node test/cache-e2e.js；npm test；node test/e2e.js；node test/checkpoint-e2e.js。

@@ -147,3 +147,13 @@ node test/portable-smoke.js
 - 初次沙箱内 Store 测试受临时目录重命名权限限制，沙箱外重跑通过。此次没有重跑全部游戏回放 E2E；录制、匹配和回放引擎未改动。
 
 - npm run dist：成功生成 dist/FlowSentinel-1.2.7-win-x64.exe（102869050 字节）。node test/portable-smoke.js：通过单文件解压启动、界面桥接、真实 Chrome 开始/停止录制及加密持久化。便携脚本的通用输出提到完整回放，但本轮仅执行上述测试，不将该文字作为本轮完整回放证据。
+
+## 1.2.8 恢复缓存验收（2026-10-26）
+
+- npm test：21/21 通过。首次沙箱运行的 Store 原子重命名遇到 EPERM，在沙箱外运行通过。
+- node test/cache-e2e.js：真实 Chrome 双实例各自首次请求静态脚本一次；同一实例巡检失败、关闭旧标签页及再次打开后，服务端资源请求总数仍为 2，确认缓存复用。验证弹出页关闭、上下文身份不变、Cookie/localStorage 保留且实例隔离、page 监听器数量不累积、目标页关闭恢复、上下文关闭和浏览器断开后重启、恢复退避中停止及达到恢复上限释放浏览器。报告见 test-results/cache-report.txt。
+- node test/e2e.js：录制、嵌套 iframe/Canvas、随机字段、双实例巡检、故障证据、自动恢复、停止和日志截图回归通过。
+- node test/checkpoint-e2e.js：检查点等待、超时阻断、录制暂停和停止回归通过。
+- 范围：HTTP 缓存验证使用带 public,max-age=3600 的本地静态脚本；不声称所有网站或 no-store 资源都能命中缓存，也不实现跨实例或跨任务缓存。
+- node test/ui-smoke.js --packaged：新版解包应用通过 GUI 启动、录制/停止、参数保存、加密持久化、双实例回放、日志图像与停止验收，无渲染异常。
+- npm run dist：成功生成 dist/FlowSentinel-1.2.8-win-x64.exe（102871944 字节）。node test/portable-smoke.js：单文件解压启动、界面桥接、真实 Chrome 录制/停止和加密持久化通过。SHA-256：6e33755e8d8efe597bb43c41022006023e78680ea8708ce482a9e40e10b27e69。
