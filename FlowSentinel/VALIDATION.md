@@ -157,3 +157,11 @@ node test/portable-smoke.js
 - 范围：HTTP 缓存验证使用带 public,max-age=3600 的本地静态脚本；不声称所有网站或 no-store 资源都能命中缓存，也不实现跨实例或跨任务缓存。
 - node test/ui-smoke.js --packaged：新版解包应用通过 GUI 启动、录制/停止、参数保存、加密持久化、双实例回放、日志图像与停止验收，无渲染异常。
 - npm run dist：成功生成 dist/FlowSentinel-1.2.8-win-x64.exe（102871944 字节）。node test/portable-smoke.js：单文件解压启动、界面桥接、真实 Chrome 录制/停止和加密持久化通过。SHA-256：6e33755e8d8efe597bb43c41022006023e78680ea8708ce482a9e40e10b27e69。
+
+## 1.2.9 名称筛选验收（2026-10-26）
+
+- npm test：21/21 通过。首次沙箱运行受临时文件重命名权限影响，沙箱外重跑全部通过。
+- node test/filter-smoke.js 与 --packaged：均通过。验证真实 Chrome 新建录制、真实 IPC 导入后沿用筛选、中文部分匹配、大小写与全角归一化、空白查询、无结果提示、Esc/按钮清空、保留当前选择，以及浅色/暗色布局无横向溢出。已查看两种主题截图。
+- npm run dist：成功；node test/portable-smoke.js：通过单文件解压启动、Chrome 录制/停止和加密持久化。
+- 产物：dist/FlowSentinel-1.2.9-win-x64.exe，102868763 字节；SHA-256：E3CB22423803F8B6588E84402814F266AB66992106E8D34520275D42F2003E55。
+- 本次为 UI 筛选变更，未重跑完整回放、图像定位及缓存恢复 E2E；未改动对应引擎代码。

@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-26。对应版本：`package.json` 中的 **1.2.8**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-26。对应版本：`package.json` 中的 **1.2.9**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -93,11 +93,12 @@ D:\ai_code\FlowSentinel\
 │   ├── cache-e2e.js             恢复缓存命中、实例隔离、标签页清理与重启兜底验收
 │   ├── checkpoint-e2e.js        检查点等待、忽略停顿、超时阻断与停止测试
 │   ├── ui-smoke.js              源码版及解包版 Electron GUI 验收
+│   ├── filter-smoke.js          名称筛选、创建与导入更新、空态和主题验收
 │   ├── theme-smoke.js           三态主题、系统变化、刷新与重启验收
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.8-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.2.9-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -207,7 +208,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.8 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.9 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -459,3 +460,10 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 旧页（包括弹出页）关闭时不触发 beforeunload。关闭失败、首个新页面创建失败、上下文关闭或浏览器断开时，下轮重启浏览器。停止、退出和达到恢复上限时最终关闭实例，缓存不跨任务持久化。
 - 遵循网站 HTTP 缓存策略，不保证 no-store、过期或已淘汰资源命中；不读取用户日常 Chrome 配置，不实现跨进程共享缓存。无新增生产模块、依赖、IPC 或流程字段，旧流程无需重录。
 - 验证命令：node test/cache-e2e.js；npm test；node test/e2e.js；node test/checkpoint-e2e.js。
+
+## 20. 1.2.9 流程名称筛选
+
+- Evidence → Finding → Path：ui/app.js/renderList() 对完整 flows 按名称包含关系派生可见列表 → 仅渲染进程筛选，不改变选择、持久化及任务 → 控件维护于 ui/index.html，布局维护于 ui/style.css，行为维护于 ui/app.js。
+- 名称和查询均 trim、NFKC 归一化并转小写；空查询显示全部。输入即时刷新，清空按钮及 Esc 重置，展示匹配数 / 总数与无结果提示。新增、导入、删除和 flow 事件仍通过 renderList 应用当前条件。
+- 无新增生产模块、依赖、IPC 或流程字段；目录树补充 test/filter-smoke.js。筛选仅保留在窗口内，刷新后重置。
+- 验证命令：node test/filter-smoke.js；node test/filter-smoke.js --packaged。覆盖真实 Chrome 创建、真实 IPC 导入后的筛选更新、中文/大小写/全角、空白、无结果、清空、选择保留和两种主题。
