@@ -7,6 +7,7 @@ const { match, crop, locateClick } = require('./vision');
 const {fieldId,generateValues}=require('./variables');
 const fs = require('fs');
 const path = require('path');
+const SUBFLOW_POLL_INTERVAL = 200;
 
 const DEFAULTS = { count: 1, interval: 15, threshold: 0.90, failures: 3, retries: 5, grace: 5, radius: 12, stepTimeout: 15000, maxStepDelay: 10000, ignoreRecordedDelays: true, actionInterval: 200, checkpointTimeout: 60000, mute: true, noThrottle: true, headless: true, chromePath: '' };
 function config(input = {}) {
@@ -110,14 +111,14 @@ class Recorder extends EventEmitter {
       page.on('framenavigated',frame=>{
         if(this.stopped||this.suppress||frame!==page.mainFrame()||!/^https?:/.test(frame.url()))return;
         const url=frame.url();
-        this.enqueue(()=>this.append({type:'goto',url,page:id,frame:[],at:Date.now()}));
+        this.enqueue(()=>this.append({type:'goto',url,page:this.ids.get(page),frame:[],at:Date.now()}));
       });
       page.on('dialog',async dialog=>{this.emit('log','warn','录制页面出现浏览器对话框，请在浏览器中处理');});
       page.on('close',()=>{this.emit('log','info','录制标签页已关闭');});
     });
     this.page=await this.context.newPage();
     browser.on('disconnected',()=>{if(!this.stopped){this.stopped=true;this.emit('closed');}});
-    this.emit('log','info','录制已开始：请在 Chrome 地址栏输入网址，然后正常操作');
+    this.emit('log','info',this.suppress?'Chrome 已打开，操作采集暂停，等待主流程恢复':'录制已开始：请在 Chrome 地址栏输入网址，然后正常操作');
   }
   append(data) {
     const at=data.at||Date.now();delete data.at;
@@ -138,6 +139,7 @@ class Recorder extends EventEmitter {
     try {
     await Promise.allSettled([...this.pages.values()].flatMap(p=>p.frames().map(f=>f.evaluate(()=>{window.__flowRecorderPause?.(true);return window.__flowFlush?.();}))));
     await this.queue;this.suppress=true;
+    for(const [id,p] of this.pages){if(!p.isClosed()&&await p.evaluate(()=>document.hasFocus()).catch(()=>false))this.activeId=id;}
     const page=this.pages.get(this.activeId);
     if(!page||page.isClosed())throw new Error('请先在需要截图的标签页中点击一次');
     this.snapshotBuffer=await page.screenshot({type:'png',timeout:15000,caret:'hide'});
@@ -289,6 +291,7 @@ class Runner extends EventEmitter {
   }
   async run(id) {
     const signal=this.controller.signal,cfg=this.cfg;
+    const scheduler=new (require('./subflows').SubflowScheduler)(this.flow.subflows);
     let attempts=0,browser,context,onPage,currentPage,currentStep=0,repeats;
     this.state(id,'等待启动',{recoveries:0});
     try {
@@ -338,23 +341,35 @@ class Runner extends EventEmitter {
             } else await replayStep(page,step,signal,(message,level='info')=>this.log(id,level,message),repeats);
           }
           this.state(id,'等待页面稳定');await sleep(cfg.grace*1000,signal);
-          let failures=0,healthy=0;
+          if(this.flow.subflows?.length)await waitForCheckpoint(pages.get(this.flow.trusted.page||0),{trusted:this.flow.trusted},cfg,signal);
+          let failures=0,healthy=0,nextInspection=0,nextSubflowCheck=0;
+          const hasSubflows=!!this.flow.subflows?.length;
           const trusted=this.flow.trusted;
           while(!signal.aborted) {
             const page=pages.get(trusted.page||0);
             if(!page||page.isClosed()||!browser.isConnected())throw new Error('浏览器或目标页面已关闭');
-            const shot=await page.screenshot({timeout:cfg.stepTimeout,caret:'hide'});check(signal);
-            const found=match(shot,Buffer.from(trusted.image,'base64'),trusted.rect,cfg.radius);
-            const ok=found.score>=cfg.threshold;
-            if(ok){failures=0;healthy++;}else{failures++;healthy=0;}
-            this.state(id,ok?'正常运行':'检查未通过',{score:found.score,checkedAt:new Date().toISOString(),failures});
-            this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures),cfg.headless?'data:image/png;base64,'+shot.toString('base64'):undefined);
-            if(healthy>=5)attempts=0;
-            if(failures>=cfg.failures) {
-              if(this.evidenceDir){fs.mkdirSync(this.evidenceDir,{recursive:true});fs.writeFileSync(path.join(this.evidenceDir,'instance-'+id+'-last-failure.png'),shot);}
-              throw new Error('可信图像连续缺失');
+            if(performance.now()>=nextInspection) {
+              const shot=await page.screenshot({timeout:cfg.stepTimeout,caret:'hide'});check(signal);
+              const found=match(shot,Buffer.from(trusted.image,'base64'),trusted.rect,cfg.radius);
+              const ok=found.score>=cfg.threshold;
+              if(ok){failures=0;healthy++;}else{failures++;healthy=0;}
+              this.state(id,ok?'正常运行':'检查未通过',{score:found.score,checkedAt:new Date().toISOString(),failures});
+              this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures),cfg.headless?'data:image/png;base64,'+shot.toString('base64'):undefined);
+              if(healthy>=5)attempts=0;
+              if(failures>=cfg.failures) {
+                if(this.evidenceDir){fs.mkdirSync(this.evidenceDir,{recursive:true});fs.writeFileSync(path.join(this.evidenceDir,'instance-'+id+'-last-failure.png'),shot);}
+                throw new Error('可信图像连续缺失');
+              }
+              nextInspection=performance.now()+cfg.interval*1000;
             }
-            await sleep(cfg.interval*1000,signal);
+            // Separate deadlines keep subflow polling fast without increasing inspection work.
+            // Await each tick, then rest: slow actions never overlap or queue catch-up ticks.
+            if(hasSubflows&&performance.now()>=nextSubflowCheck) {
+              await scheduler.tick(pages,cfg,signal,(l,m)=>this.log(id,l,m),id);
+              nextSubflowCheck=performance.now()+SUBFLOW_POLL_INTERVAL;
+            }
+            const nextWake=hasSubflows?Math.min(nextInspection,nextSubflowCheck):nextInspection;
+            await sleep(Math.max(0,nextWake-performance.now()),signal);
           }
         } catch(error) {
           if(signal.aborted)break;

@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-26。对应版本：`package.json` 中的 **1.2.9**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-26。对应版本：`package.json` 中的 **1.3.3**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -62,6 +62,8 @@ D:\ai_code\FlowSentinel\
 │   ├── main.js                  Electron 主进程入口、IPC 分派和应用协调
 │   ├── preload.js               暴露 window.flowAPI 的最小隔离桥接层
 │   ├── engine.js                录制、回放、检查点、并发巡检和自动恢复核心
+│   ├── subflows.js              子流程录入状态机、主流程恢复、串行触发调度
+│   ├── cron.js                  五/六段数字 crontab 解析、时间槽与本机时区匹配
 │   ├── repeat-clicks.js         每轮每实例的连续同点点击坐标复用与失效
 │   ├── capture.js               CDP 合成帧缓存与点击前截图兜底
 │   ├── recorder-script.js       注入每个文档的事件录制脚本
@@ -79,6 +81,9 @@ D:\ai_code\FlowSentinel\
 │       ├── icon.png             主窗口 PNG 图标
 │       └── icon.ico             Windows 打包图标
 ├── test/
+│   ├── subflows.test.js         crontab 与子流程协议校验
+│   ├── subflows-e2e.js          真实 Chrome 恢复、触发、隔离、停止和重试验收
+│   ├── subflows-ui.js           源码版及解包版子流程 GUI 验收
 │   ├── repeat.test.js           连续点击识别、图像相似与隔离规则单元测试
 │   ├── repeat-e2e.js            九次点击、按钮变色、重定位、失效及双实例验收
 │   ├── capture.test.js          点击前帧选择、后帧排除和资源释放测试
@@ -98,7 +103,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.2.9-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.3.3-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -208,7 +213,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.2.9 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.3.3 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -467,3 +472,40 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 名称和查询均 trim、NFKC 归一化并转小写；空查询显示全部。输入即时刷新，清空按钮及 Esc 重置，展示匹配数 / 总数与无结果提示。新增、导入、删除和 flow 事件仍通过 renderList 应用当前条件。
 - 无新增生产模块、依赖、IPC 或流程字段；目录树补充 test/filter-smoke.js。筛选仅保留在窗口内，刷新后重置。
 - 验证命令：node test/filter-smoke.js；node test/filter-smoke.js --packaged。覆盖真实 Chrome 创建、真实 IPC 导入后的筛选更新、中文/大小写/全角、空白、无结果、清空、选择保留和两种主题。
+
+## 21. 1.3.0 子流程录入与条件调度
+
+- Evidence → Finding → Path：subflows.js/SubflowSession 管理 restoring → condition → recording → review → saved 状态；恢复期间 Recorder.suppress 丢弃事件，切换阶段暂停并 flush 页面队列 → 主流程自动回放和准备动作不会混入子流程 → 生命周期修改 subflows.js，IPC 修改 main.js。
+- 每次录入复用主流程配置、固定视口和可见独立 Chrome。executeSteps 回放主流程并生成随机字段，等待 grace 后通过 waitForCheckpoint 验证最终可信图；失败最多重试 retries 次，总尝试为 1 + retries。1.3.3 起继续新增保留 Chrome/Context 和当前标签页画面，仅清空草稿并等待用户确认触发条件；首次开始录入仍恢复主流程。停止取消等待并关闭浏览器，已保存子流程不受影响。
+- Flow 新增可选 subflows 数组；元素包含 id、name、pageBase、trigger、steps。trigger 为 `{type:'cron',expression}` 或 `{type:'image',trusted:{rect,image,page}}`。pageBase 是主流程回放后页面编号上界，子流程新页执行时使用局部编号，完成后关闭。子流程不嵌套、至少一个操作，保存后只允许删除；流程整体加密存储不变。
+- Runner 每实例创建 SubflowScheduler，主流程最终可信图就绪后，在巡检循环中顺序检查并执行子流程。每次执行独立 RepeatClicks，使用当前实例页面；操作超时和检查点超时复用主配置。失败进入现有主流程恢复分支；cron 成功分钟去重和失败待重试状态跨恢复保留，不跨任务持久化。截图条件每轮匹配即可再次触发。
+- cron.js 是无依赖的五段数字 crontab 解析器，支持 *、列表、范围、步长；本机时区，星期 0/7 为周日，日期和星期同时指定采用 OR。仅检查当前分钟，不补跑遗漏分钟，不创建操作系统计划任务。1.3.1 起子流程检查使用固定 200ms 轮询等待，不再复用 interval；截图、匹配与子流程耗时会延长实际周期。
+- flow-schema.js 验证条件、动作、ID、名称及禁止嵌套；flow-transfer.js 对含子流程的导出声明 minImporterVersion=1.3.0，旧流程保留 1.2.7。summary 对子流程步骤做脱敏投影，不发送录制表单值。
+- IPC 新增 startSubflow、nextSubflow、subTrigger、finishSubflow、resumeSubflow、saveSubflow、stopSubflow、deleteSubflow；snapshot/checkpoint/cancelCapture 按当前会话路由。status 新增 subPhase/subDraft。录入期间主进程统一互斥检查，UI 禁用运行、配置、导入导出和删除。
+- UI 增加子流程卡片、简易 cron 控件和只读步骤预览，复用截图框选对话框。维护 ui/index.html、ui/app.js、ui/style.css；主流程录制行为不变。
+- 验证入口：npm test、node test/subflows-e2e.js、node test/subflows-ui.js（--packaged 验证解包版）；实际结果见 VALIDATION.md。
+
+## 22. 1.3.1 子流程独立轮询
+
+- Evidence → Finding → Path：engine.js/Runner.run() 使用 performance.now() 分别维护 nextInspection 与 nextSubflowCheck → 最终可信图按 interval 检查，子流程检查和执行完成后固定等待 SUBFLOW_POLL_INTERVAL=200ms → 调度修改 engine.js，真实双实例回归见 test/subflows-e2e.js。
+- 同一实例仍串行检查和执行，无重叠任务或补跑积压；长动作期间到期的巡检在动作结束后执行。只有巡检到期才截图、计数、输出巡检日志，避免 200ms 轮询放大最终巡检成本。
+- 无子流程时只等待巡检截止时间；停止沿用可取消 sleep，恢复后重置两个截止时间，cron 分钟去重与失败重试状态保持原行为。
+- 无新增模块、依赖、配置项、IPC 或流程字段；源码目录结构不变，发布产物更新为 1.3.1。
+
+
+## 23. 1.3.2 秒级定时与子流程界面
+
+- Evidence → Finding → Path：cron.js/parseCron、cronMatches、cronSlot 接受六段“秒 分 时 日 月 星期”，按秒匹配和去重；旧五段仍在整分钟内匹配并按分钟去重。subflows.js/SubflowScheduler 使用每实例 slots 保存时间槽，pending 保留失败重试，恢复不丢失状态。无需改写旧流程。
+- 调度仍由 Runner 的 200ms 独立轮询驱动，动作串行，不补跑错过的时间槽；六段最小精度为秒，实际响应受动作、截图与匹配耗时影响，不保证精确准点。每 N 秒/分钟按分钟/小时边界取步长。
+- UI 的 syncCron 新增每 N 秒，每小时与每 N 分钟可指定秒，每天可指定时分秒；默认生成六段表达式，自定义仍接受五段。index.html 移除复用巡检间隔的过时提示；style.css/theme.css 统一定时控件、浅暗主题及按钮间距。
+- flow-transfer.js 对含六段 cron 的流程声明 minImporterVersion=1.3.2；仅含五段或截图子流程仍声明 1.3.0，没有子流程仍为 1.2.7。本机存储、IPC、依赖及源码目录结构不变。
+- 验证入口：test/subflows.test.js 覆盖秒级解析、分钟兼容、时间槽去重、失败重试和导入门槛；test/subflows-e2e.js 增加真实双实例秒级触发；test/subflows-ui.js 覆盖时间输入、秒级预设及两种主题截图。发布产物为 dist/FlowSentinel-1.3.2-win-x64.exe。
+
+## 24. 1.3.3 连续录入保留当前画面
+
+- Evidence → Finding → Path：main.js/nextSubflow 改为调用 subflows.js/SubflowSession.next()，从 saved 直接进入 condition；保留浏览器、上下文、标签页与主流程 pageBase，不重新导航或回放主流程。首次 start() 仍使用 restore()。
+- next() 等待暂停与队列排空，清空新草稿、触发条件和旧截图选择状态；保存后的子流程仍为独立深拷贝。saved/condition 阶段的手动操作不会录入，setTrigger() 确认条件后恢复采集并重置计时。
+- UI 提示用户可先手动调整页面，再确认触发条件开始录制。手动准备不作为回放步骤，运行时仍需由业务画面和触发条件满足操作前提。
+- 无新模块、依赖、IPC 或数据字段，源码目录树不变。回归路径：test/subflows-e2e.js 验证页面身份、画面状态保留及准备动作隔离；test/subflows-ui.js 验证真实按钮、截图取消和保存；发布产物为 dist/FlowSentinel-1.3.3-win-x64.exe。
+
+- 连续录入保留旧弹出页；save() 将本次新增页编号转换为从 pageBase 开始的局部编号，同时转换检查点页号。直接引用录制开始前已有的额外标签页会提示重新录入打开动作，防止保存不可独立回放的步骤。

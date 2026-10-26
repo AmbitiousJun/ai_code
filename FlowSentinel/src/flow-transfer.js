@@ -13,7 +13,7 @@ function version(value){
 function older(a,b){const x=version(a),y=version(b);for(let i=0;i<3;i++){if(x[i]!==y[i])return x[i]<y[i];}return false;}
 function encode(flow,appVersion){
   version(appVersion);
-  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:MIN_VERSION,exporterVersion:appVersion,flow});
+  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:flow.subflows?.some(s=>s.trigger?.type==='cron'&&s.trigger.expression.trim().split(/\s+/).length===6)?'1.3.2':flow.subflows?.length?'1.3.0':MIN_VERSION,exporterVersion:appVersion,flow});
   if(Buffer.byteLength(text)>MAX_BYTES)throw new Error('流程文件超过 128 MiB 限制');
   return text;
 }

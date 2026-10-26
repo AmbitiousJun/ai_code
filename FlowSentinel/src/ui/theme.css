@@ -24,7 +24,7 @@ select:focus-visible, summary:focus-visible { outline:2px solid #32a993; outline
 [data-theme=light] .card { background:linear-gradient(115deg,#fff,#fbfcfe); border-color:#d6e1eb; box-shadow:0 4px 12px #243b5310; }
 [data-theme=light] .card h2 { color:#2d455d; }
 [data-theme=light] label { color:#4f657b; }
-[data-theme=light] input:not([type=checkbox]), [data-theme=light] .variable-controls select { background:#fff; border-color:#bdcddd; color:#233b53; }
+[data-theme=light] input:not([type=checkbox]), [data-theme=light] .variable-controls select, [data-theme=light] .cron-fields select { background-color:#fff; border-color:#bdcddd; color:#233b53; }
 [data-theme=light] input::placeholder { color:#6a7c8e; }
 [data-theme=light] input:focus { border-color:#138874; }
 [data-theme=light] input[type=checkbox] { accent-color:#087e6c; }

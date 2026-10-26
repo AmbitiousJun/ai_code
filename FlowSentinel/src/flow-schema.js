@@ -26,6 +26,17 @@ function validateFlow(f){
     if(s.type==='canvas')requireValue(Array.isArray(s.points)&&s.points.length>0&&s.points.every(p=>object(p)&&finite(p.x)&&finite(p.y)&&finite(p.t)));
     if(s.type==='checkpoint'){image(s.trusted);requireValue(finite(s.timeout)&&s.timeout>0&&finite(s.threshold)&&s.threshold>=0.5&&s.threshold<=1);}
   }
+  if(f.subflows!==undefined){
+    requireValue(Array.isArray(f.subflows));const ids=new Set();
+    for(const sub of f.subflows){
+      requireValue(object(sub)&&typeof sub.id==='string'&&!ids.has(sub.id)&&typeof sub.name==='string'&&sub.name.trim().length>0&&sub.name.length<=80&&object(sub.trigger)&&Array.isArray(sub.steps)&&sub.steps.some(s=>s&&s.type!=='checkpoint')&&sub.subflows===undefined);
+      ids.add(sub.id);
+      if(sub.trigger.type==='cron')require('./cron').parseCron(sub.trigger.expression);
+      else {requireValue(sub.trigger.type==='image');image(sub.trigger.trusted);requireValue(Number.isInteger(sub.trigger.trusted.page)&&sub.trigger.trusted.page>=0);}
+      if(sub.pageBase!==undefined)requireValue(Number.isInteger(sub.pageBase)&&sub.pageBase>=1);
+      validateFlow({...sub,version:1,viewport:f.viewport,config:f.config});
+    }
+  }
   validateRules(f,f.variables);
   return f;
 }

@@ -4,8 +4,10 @@ const fs=require('fs');
 const {Store}=require('./store');
 const transfer=require('./flow-transfer');
 const {validateFlow}=require('./flow-schema');
+const {SubflowSession}=require('./subflows');
+let subSession=null;
 let pendingImport=null;
-function transferIdle(){if(recorder||runner||recordStarting)throw new Error('请先停止当前录制或任务');}
+function transferIdle(){if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');}
 const {Recorder,Runner,DEFAULTS,config,label}=require('./engine');
 const {fields,validateRules,expand}=require('./variables');
 let win,store,recorder,runner,recordStarting=false,closing=false;
@@ -25,11 +27,35 @@ function log(level,message,image){
     fs.appendFileSync(file,JSON.stringify({time:entry.time,level,message})+'\n');
   }catch{}
 }
-function summary(flow){return {...flow,config:config(flow.config),fields:fields(flow),steps:flow.steps.map((s,i)=>({index:i+1,type:s.type,label:label(s),frameDepth:s.frame?.length||0,page:s.page||0,timeout:s.timeout,visualImage:s.visual?'data:image/png;base64,'+s.visual.image:undefined,visualError:s.visualError,checkpointImage:s.type==='checkpoint'?'data:image/png;base64,'+s.trusted.image:undefined})),trusted:flow.trusted?{...flow.trusted,image:'data:image/png;base64,'+flow.trusted.image}:null};}
-function status(){return{recording:!!recorder||recordStarting,running:!!runner,recordingId:recorder?.flow.id,states};}
+function summary(flow){return {...flow,subflows:(flow.subflows||[]).map(sub=>({id:sub.id,name:sub.name,trigger:sub.trigger.type==='image'?{type:'image',trusted:{...sub.trigger.trusted,image:'data:image/png;base64,'+sub.trigger.trusted.image}}:sub.trigger,steps:sub.steps.map((step,i)=>({index:i+1,type:step.type,label:label(step),page:step.page||0}))})),config:config(flow.config),fields:fields(flow),steps:flow.steps.map((s,i)=>({index:i+1,type:s.type,label:label(s),frameDepth:s.frame?.length||0,page:s.page||0,timeout:s.timeout,visualImage:s.visual?'data:image/png;base64,'+s.visual.image:undefined,visualError:s.visualError,checkpointImage:s.type==='checkpoint'?'data:image/png;base64,'+s.trusted.image:undefined})),trusted:flow.trusted?{...flow.trusted,image:'data:image/png;base64,'+flow.trusted.image}:null};}
+function status(){return{recording:!!recorder||recordStarting||!!subSession,subPhase:subSession?.phase,subDraft:subSession?{steps:subSession.recorder?.flow.steps.map((s,i)=>({index:i+1,label:label(s)}))||[],defaultName:'子流程 '+((subSession.flow.subflows?.length||0)+1)}:null,running:!!runner,recordingId:subSession?.flow.id||recorder?.flow.id,states};}
 function update(){emit({type:'status',...status()});}
 async function command(action,data={}){
   switch(action){
+    case 'startSubflow':{
+      transferIdle();const session=new SubflowSession(store.get(data.id));subSession=session;
+      session.on('log',log);session.on('status',update);session.on('draft',update);
+      session.on('closed',()=>{if(subSession===session){subSession=null;update();log('info','子流程录入浏览器已关闭，未保存草稿已丢弃');}});
+      update();
+      try{await session.start();return status();}catch(e){await session.stop();if(subSession===session)subSession=null;update();throw e;}
+    }
+    case 'nextSubflow':{
+      const session=subSession;if(!session||session.phase!=='saved')throw new Error('请先保存当前子流程');
+      try{await session.next();return status();}catch(e){await session.stop();if(subSession===session)subSession=null;update();throw e;}
+    }
+    case 'subTrigger':{if(!subSession)throw new Error('请先录入子流程');await subSession.setTrigger(data);return status();}
+    case 'finishSubflow':{if(!subSession)throw new Error('请先录入子流程');await subSession.finish();return status();}
+    case 'resumeSubflow':{if(subSession?.phase!=='review')throw new Error('没有待保存草稿');await subSession.recorder.resumeCapture();subSession.setPhase('recording');return status();}
+    case 'saveSubflow':{
+      if(!subSession)throw new Error('请先录入子流程');subSession.save(data.name);validateFlow(subSession.flow);store.save(subSession.flow);
+      const f=summary(subSession.flow);emit({type:'flow',flow:f});log('info','子流程已保存');return f;
+    }
+    case 'stopSubflow':{
+      const session=subSession;if(session){await session.stop();if(subSession===session)subSession=null;update();}return;
+    }
+    case 'deleteSubflow':{
+      transferIdle();const f=store.get(data.id);f.subflows=(f.subflows||[]).filter(s=>s.id!==data.subId);store.save(f);return summary(f);
+    }
     case 'init':return{flows:store.list().map(summary),defaults:DEFAULTS,logs,...status(),dataDir:dataDir()};
     case 'list':return store.list().map(summary);
     case 'exportFlow':{
@@ -59,7 +85,7 @@ async function command(action,data={}){
       const result=summary(flow);store.save(flow);pendingImport=null;return result;
     }
     case 'record':{
-      if(recorder||runner||recordStarting)throw new Error('请先停止当前录制或任务');
+      if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');
       const name=String(data.name||'').trim();if(!name)throw new Error('请填写流程名称');
       const viewport={width:Number(data.width)||1280,height:Number(data.height)||720};
       if(viewport.width<640||viewport.width>3840||viewport.height<480||viewport.height>2160)throw new Error('视口范围：宽 640–3840，高 480–2160');
@@ -80,6 +106,7 @@ async function command(action,data={}){
       await r.stop();store.save(r.flow);recorder=null;update();log('info','录制结束，已保存 '+r.flow.steps.length+' 个步骤');return summary(r.flow);
     }
     case 'snapshot':{
+      if(subSession){if(!['condition','recording'].includes(subSession.phase))throw new Error('当前不能截图');return 'data:image/png;base64,'+(await subSession.recorder.snapshot()).toString('base64');}
       if(!recorder)throw new Error('请先开始录制');
       return 'data:image/png;base64,'+(await recorder.snapshot()).toString('base64');
     }
@@ -88,16 +115,17 @@ async function command(action,data={}){
       recorder.setTrusted(data);await recorder.resumeCapture();return summary(recorder.flow);
     }
     case 'checkpoint':{
+      if(subSession){if(subSession.phase!=='recording')throw new Error('请先录制动作');subSession.recorder.setCheckpoint(data.rect,data);await subSession.recorder.resumeCapture();return;}
       if(!recorder)throw new Error('请先开始录制');
       recorder.setCheckpoint(data.rect,{timeout:data.timeout,threshold:data.threshold});await recorder.resumeCapture();return summary(recorder.flow);
     }
-    case 'cancelCapture':await recorder?.resumeCapture();return;
+    case 'cancelCapture':if(subSession){const r=subSession.recorder;await r.resumeCapture();if(subSession.phase!=='recording')await subSession.pause();}else await recorder?.resumeCapture();return;
     case 'config':{
-      if(recorder||runner)throw new Error('请停止后再修改配置');
+      if(recorder||runner||recordStarting||subSession)throw new Error('请停止后再修改配置');
       const f=store.get(data.id);f.config=config(data.config);f.variables=validateRules(f,data.variables);store.save(f);return summary(f);
     }
     case 'start':{
-      if(recorder||runner||recordStarting)throw new Error('请先停止当前录制或任务');
+      if(recorder||runner||recordStarting||subSession)throw new Error('请先停止当前录制或任务');
       const f=store.get(data.id);f.config=config(data.config);f.variables=validateRules(f,data.variables);
       if(!f.steps.some(s=>s.type==='goto')||!f.trusted)throw new Error('流程需要至少一个网址和一个可信截图区域');
       store.save(f);states=[];
@@ -110,7 +138,7 @@ async function command(action,data={}){
       if(runner){const run=runner;log('info','正在停止：中断等待并关闭任务浏览器');await run.stop();if(runner===run)runner=null;update();}return;
     }
     case 'delete':{
-      if(recorder||runner)throw new Error('请停止后再删除');
+      if(recorder||runner||recordStarting||subSession)throw new Error('请停止后再删除');
       const f=store.get(data.id);
       const answer=await dialog.showMessageBox(win,{type:'question',buttons:['取消','删除'],defaultId:0,cancelId:0,message:'删除流程“'+f.name+'”？',detail:'录制步骤、表单数据、可信图像与故障截图将一并删除。'});
       if(answer.response===1){store.delete(f.id);fs.rmSync(path.join(dataDir(),'evidence',f.id),{recursive:true,force:true});log('info','流程已删除');return true;}return false;
@@ -137,7 +165,7 @@ else{
     win.loadFile(path.join(__dirname,'ui','index.html'));
     win.on('close',event=>{
       if(closing)return;event.preventDefault();closing=true;
-      Promise.allSettled([recorder?.stop(),runner?.stop()]).finally(()=>{win.destroy();app.quit();});
+      Promise.allSettled([recorder?.stop(),runner?.stop(),subSession?.stop()]).finally(()=>{win.destroy();app.quit();});
     });
   });
   app.on('window-all-closed',()=>app.quit());

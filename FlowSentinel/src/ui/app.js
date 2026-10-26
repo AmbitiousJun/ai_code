@@ -38,11 +38,14 @@ function renderDetail(){
   $('flowTitle').textContent=f?f.name:'录一次，持续守护';$('flowInfo').textContent=f?f.viewport.width+' × '+f.viewport.height+' 固定视口 · 自动保存于本机':'打开独立 Chrome，录制表单、Canvas 与 iframe 操作。';
   $('newPanel').hidden=!!f||state.recording;$('detailPanel').hidden=!f;$('deleteFlow').hidden=!f;$('exportFlow').hidden=!f;
   if(f){$('stepCount').textContent=f.steps.length+' 个步骤';$('steps').replaceChildren();f.steps.forEach(s=>{const div=document.createElement('div');div.textContent=String(s.index).padStart(2,'0')+'  '+s.label+(s.frameDepth?' · iframe 层级 '+s.frameDepth:'')+(s.page?' · 标签页 '+(s.page+1):'');if(s.visualImage){const img=document.createElement('img');img.src=s.visualImage;img.className='click-preview';img.alt='点击位置参考截图';img.title='点击前截图：原位置优先；唯一匹配时重定位；未找到或多个匹配时回退原坐标';div.append(img);}if(s.visualError){const warning=document.createElement('span');warning.className='click-warning';warning.textContent=' · '+s.visualError+'（回放时使用录制原坐标）';div.append(warning);}$('steps').append(div);});$('steps').scrollTop=$('steps').scrollHeight;$('trustedImage').hidden=!f.trusted;if(f.trusted)$('trustedImage').src=f.trusted.image;$('trustedInfo').textContent=f.trusted?f.trusted.rect.width+' × '+f.trusted.rect.height+' · 已保存基准图':'尚未设置可信区域';}
-  updateControls();
+  renderSubflows(f);updateControls();
 }
 function updateControls(){
+  $('startSubflow').disabled=busy||state.running||state.recording||!selected;
+  for(const id of ['subImage','subCron','subCheckpoint','finishSubflow','resumeSubflow','saveSubflow','nextSubflow'])$(id).disabled=busy;
+  document.querySelectorAll('.delete-subflow').forEach(b=>b.disabled=busy||state.running||state.recording);
   $('importFlow').disabled=busy||state.running||state.recording;$('exportFlow').disabled=busy||state.running||state.recording||!selected;
-  $('status').textContent=state.recording?'● 录制中':state.running?'● 执行与巡检中':'待机';$('recordPanel').hidden=!state.recording;
+  $('status').textContent=state.recording?'● 录制中':state.running?'● 执行与巡检中':'待机';$('recordPanel').hidden=!state.recording||!!state.subPhase;
   $('stopNow').hidden=!state.recording&&!state.running;
   document.querySelectorAll('.variable-field select,.variable-field input').forEach(el=>el.disabled=state.recording||state.running);
   $('record').disabled=busy||state.running||state.recording;$('newFlow').disabled=busy||state.running||state.recording;
@@ -81,12 +84,12 @@ $('record').onclick=()=>task(async()=>{const flow=await call('record',{name:$('n
 $('stopRecord').onclick=()=>task(async()=>upsert(await call('stopRecord')));
 $('saveConfig').onclick=()=>task(async()=>{upsert(await call('config',{id:selected,config:config(),variables:variables()}));notice('配置已保存');});
 $('start').onclick=()=>task(async()=>upsert(await call('start',{id:selected,config:config(),variables:variables()})));
-$('stopNow').onclick=()=>task(async()=>{if(state.recording)upsert(await call('stopRecord'));else await call('stop');});
+$('stopNow').onclick=()=>task(async()=>{if(state.subPhase)await call('stopSubflow');else if(state.recording)upsert(await call('stopRecord'));else await call('stop');});
 $('stop').onclick=()=>task(()=>call('stop'));
 $('deleteFlow').onclick=()=>task(async()=>{if(await call('delete',{id:selected})){flows=flows.filter(f=>f.id!==selected);selected=null;renderList();renderDetail();}});
 $('openData').onclick=()=>task(()=>call('openData'));
 $('chooseChrome').onclick=()=>task(async()=>{const p=await call('chrome');if(p)$('chromePath').value=p;});
-async function capture(kind){captureKind=kind;let opened=false;try{const data=await call('snapshot');shotImage=new Image();await new Promise((res,rej)=>{shotImage.onload=res;shotImage.onerror=rej;shotImage.src=data;});const canvas=$('captureCanvas');canvas.width=shotImage.width;canvas.height=shotImage.height;selection=null;draw();$('saveTrusted').disabled=true;$('selectionInfo').textContent='尚未选择区域';$('captureTitle').textContent=kind==='checkpoint'?'框选“可继续执行”的可信画面':'框选最终巡检的可信画面';$('saveTrusted').textContent=kind==='checkpoint'?'插入检查点并继续录制':'保存最终巡检截图';$('checkpointOptions').hidden=kind!=='checkpoint';$('captureTimeout').value=$('checkpointTimeout').value;$('captureThreshold').value=$('threshold').value;$('captureDialog').showModal();opened=true;}finally{if(!opened)await call('cancelCapture');}}
+async function capture(kind){captureKind=kind;let opened=false;try{const data=await call('snapshot');shotImage=new Image();await new Promise((res,rej)=>{shotImage.onload=res;shotImage.onerror=rej;shotImage.src=data;});const canvas=$('captureCanvas');canvas.width=shotImage.width;canvas.height=shotImage.height;selection=null;draw();$('saveTrusted').disabled=true;$('selectionInfo').textContent='尚未选择区域';$('captureTitle').textContent=kind==='trigger'?'框选子流程触发画面':kind==='checkpoint'?'框选“可继续执行”的可信画面':'框选最终巡检的可信画面';$('saveTrusted').textContent=kind==='trigger'?'确认条件并开始录制动作':kind==='checkpoint'?'插入检查点并继续录制':'保存最终巡检截图';$('checkpointOptions').hidden=kind!=='checkpoint';$('captureTimeout').value=$('checkpointTimeout').value;$('captureThreshold').value=$('threshold').value;$('captureDialog').showModal();opened=true;}finally{if(!opened)await call('cancelCapture');}}
 $('snapshot').onclick=()=>task(()=>capture('final'));
 $('checkpoint').onclick=()=>task(()=>capture('checkpoint'));
 function draw(){const c=$('captureCanvas'),ctx=c.getContext('2d');ctx.clearRect(0,0,c.width,c.height);ctx.drawImage(shotImage,0,0);if(selection){ctx.fillStyle='#0007';ctx.fillRect(0,0,c.width,c.height);ctx.drawImage(shotImage,selection.x,selection.y,selection.width,selection.height,selection.x,selection.y,selection.width,selection.height);ctx.strokeStyle='#61ffcf';ctx.lineWidth=2;ctx.strokeRect(selection.x,selection.y,selection.width,selection.height);}}
@@ -96,7 +99,7 @@ $('captureCanvas').onpointermove=e=>{if(!dragStart)return;const p=point(e);selec
 $('captureCanvas').onpointerup=()=>dragStart=null;
 $('cancelCapture').onclick=()=>task(async()=>{await call('cancelCapture');$('captureDialog').close();});
 $('captureDialog').addEventListener('cancel',event=>{event.preventDefault();$('cancelCapture').click();});
-$('saveTrusted').onclick=()=>task(async()=>{const result=captureKind==='checkpoint'?await call('checkpoint',{rect:selection,timeout:Number($('captureTimeout').value)*1000,threshold:Number($('captureThreshold').value)/100}):await call('trusted',selection);upsert(result);$('captureDialog').close();});
+$('saveTrusted').onclick=()=>task(async()=>{const result=captureKind==='trigger'?await call('subTrigger',{type:'image',rect:selection}):captureKind==='checkpoint'?await call('checkpoint',{rect:selection,timeout:Number($('captureTimeout').value)*1000,threshold:Number($('captureThreshold').value)/100}):await call('trusted',selection);if(captureKind!=='trigger')upsert(result);$('captureDialog').close();});
 window.flowAPI.onEvent(event=>{
   if(event.type==='log')addLog(event.entry);
   if(event.type==='flow'){if(state.recording&&!selected)selected=event.flow.id;upsert(event.flow);}
@@ -122,3 +125,44 @@ $('confirmImport').onclick=()=>task(async()=>{
   try{const flow=await call('confirmImport',{name:$('importName').value});selected=flow.id;setConfig(flow.config);upsert(flow);$('importDialog').close();notice('流程已导入');}
   finally{$('cancelImport').disabled=false;$('importName').disabled=false;checkImportName();}
 });
+
+function renderSubflows(flow){
+  $('subflowsPanel').hidden=!flow;$('subEditor').hidden=!state.subPhase;
+  const phase=state.subPhase;
+  $('subStatus').textContent=({restoring:'正在恢复主流程，请等待。此阶段不记录操作。',condition:'录制已暂停，可手动调整当前页面；确认触发条件后开始录制动作。',recording:'正在录制子流程动作。至少录入一个动作后完成并保存。',review:'录制已暂停，请检查步骤并命名保存。',saved:'子流程已保存，当前画面保持不变。可先手动调整页面，再继续录入新的子流程；调整操作不会记录。'})[phase]||'';
+  for(const [id,value] of [['subCondition','condition'],['subRecording','recording'],['subReview','review'],['nextSubflow','saved']])$(id).hidden=phase!==value;
+  if(phase==='review'&&$('subName').dataset.phase!=='review')$('subName').value=state.subDraft?.defaultName||'子流程';
+  $('subName').dataset.phase=phase||'';
+  $('subDraftSteps').replaceChildren();
+  for(const step of state.subDraft?.steps||[]){const row=document.createElement('p');row.textContent=step.index+'. '+step.label;$('subDraftSteps').append(row);}
+  $('subflowList').replaceChildren();
+  for(const sub of flow?.subflows||[]){
+    const box=document.createElement('details'),title=document.createElement('summary');title.textContent=sub.name+' · '+sub.steps.length+' 步 · '+(sub.trigger.type==='cron'?sub.trigger.expression:'截图触发');box.append(title);
+    if(sub.trigger.type==='image'){const img=document.createElement('img');img.src=sub.trigger.trusted.image;img.alt='子流程触发截图';img.className='sub-trigger-preview';box.append(img);}
+    for(const step of sub.steps){const row=document.createElement('p');row.textContent=step.index+'. '+step.label+' · 标签页 '+(step.page+1);box.append(row);}
+    const remove=document.createElement('button');remove.textContent='删除子流程';remove.className='danger delete-subflow';remove.onclick=()=>{if(confirm('删除子流程“'+sub.name+'”？'))task(async()=>upsert(await call('deleteSubflow',{id:selected,subId:sub.id})));};box.append(remove);$('subflowList').append(box);
+  }
+}
+function syncCron(){
+  const mode=$('cronPreset').value;
+  $('cronEveryLabel').hidden=!['seconds','minutes'].includes(mode);
+  $('cronEveryUnit').textContent=mode==='seconds'?'间隔秒数':'间隔分钟';
+  $('cronTimeLabel').hidden=mode!=='daily';$('cronMinuteLabel').hidden=mode!=='hourly';
+  $('cronSecondLabel').hidden=!['minutes','hourly'].includes(mode);$('cronExpression').readOnly=mode!=='custom';
+  const [hour,minute,second=0]=$('cronTime').value.split(':').map(Number);
+  if(mode==='seconds')$('cronExpression').value='*/'+$('cronEvery').value+' * * * * *';
+  if(mode==='minutes')$('cronExpression').value=$('cronSecond').value+' */'+$('cronEvery').value+' * * * *';
+  if(mode==='hourly')$('cronExpression').value=$('cronSecond').value+' '+$('cronMinute').value+' * * * *';
+  if(mode==='daily')$('cronExpression').value=second+' '+minute+' '+hour+' * * *';
+}
+for(const id of ['cronPreset','cronEvery','cronTime','cronMinute','cronSecond'])$(id).oninput=syncCron;
+syncCron();
+$('startSubflow').onclick=()=>task(async()=>{upsert(await call('config',{id:selected,config:config(),variables:variables()}));await call('startSubflow',{id:selected});});
+$('subImage').onclick=()=>task(()=>capture('trigger'));
+$('subCron').onclick=()=>task(()=>call('subTrigger',{type:'cron',expression:$('cronExpression').value}));
+$('subCheckpoint').onclick=()=>task(()=>capture('checkpoint'));
+$('finishSubflow').onclick=()=>task(()=>call('finishSubflow'));
+$('resumeSubflow').onclick=()=>task(()=>call('resumeSubflow'));
+$('saveSubflow').onclick=()=>task(async()=>upsert(await call('saveSubflow',{name:$('subName').value})));
+$('nextSubflow').onclick=()=>task(()=>call('nextSubflow'));
+$('stopSubflow').onclick=()=>task(()=>call('stopSubflow'));

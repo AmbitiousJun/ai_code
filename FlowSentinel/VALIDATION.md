@@ -1,4 +1,40 @@
-# FlowSentinel 1.1.0 验收记录
+# FlowSentinel 验收记录
+
+## 1.3.1 子流程独立轮询验收（2026-10-26，北京时间）
+
+- 子流程每轮检查和执行结束后固定等待 200ms；最终可信图使用独立巡检截止时间，同实例动作仍串行。未新增模块、配置项或数据格式。
+- npm test：23/23 通过。首次沙箱执行 Store 原子重命名遇到 EPERM，沙箱外完整重跑通过。
+- node test/subflows-e2e.js：通过。真实 Chrome 双实例在 15 秒巡检间隔下数秒内重复完成截图子流程，最终巡检仅各执行一次；另验证 1 秒巡检周期继续生效、子流程完成间隔不低于约 200ms、分钟去重、失败恢复、停止及录入状态机。
+- 测试调整：首次运行受沙箱本机网络访问限制；沙箱外回归发现夹具的 1 秒操作/就绪截图超时提前消耗恢复次数，将夹具两项超时提高至 5 秒后完整通过。正式应用默认超时未改变。
+- node test/e2e.js：通过原主流程录制、随机字段、跨域 iframe/Canvas、双实例巡检、故障证据、自动恢复、停止及日志截图回归。
+- node test/subflows-ui.js --packaged：通过真实 Electron/Chrome 的子流程录入、条件设置、预览保存、删除、互斥、加密持久化及导入导出验收。
+- npm run dist：成功。node test/portable-smoke.js：通过单文件解压启动、真实 Chrome 录制/停止、界面桥接及加密持久化。核对 app.asar 中 engine.js 与本次源码完全一致，包版本为 1.3.1。
+- 产物：dist/FlowSentinel-1.3.1-win-x64.exe，102874146 字节；SHA-256：43FEAA781E9E97C1728F9CC8A802BF3FB5DCB64F45E9B4E4B4F5A1C4C9B5DD63。
+- 本轮使用本地夹具及独立数据目录，未修改用户录制数据；未运行全部 Canvas 专项回归或 64 实例性能压测。实际轮询周期包含截图、匹配、动作及到期巡检耗时。
+
+## 1.3.0 子流程验收（2026-10-26，北京时间）
+
+Windows x64，Node.js 22.23.4，Electron 45.0.0，本机 Chrome；使用独立测试数据目录和本机 HTTP 夹具，不修改用户流程。
+
+| 命令 | 结果与范围 |
+| --- | --- |
+| `npm test` | 23 项通过，包括 crontab 范围/列表/步长/星期、子流程数据校验、交换最低版本与旧文件兼容 |
+| `node test/subflows-e2e.js` | 通过：恢复期间和条件准备不录入；必填条件/动作；保存命名；同 Chrome 连续录入；截图和定时；双实例隔离；同分钟去重；弹出页动作；定时失败恢复重试上限；停止和手动关闭 |
+| `node test/subflows-ui.js` | 通过：真实 Electron/Chrome 的 cron 控件、截图框选/取消、动作必填、预览/删除、互斥、加密持久化、真实导出导入及导入后追加录制 |
+| `node test/subflows-ui.js --packaged` | 上述子流程 GUI 验收在 dist 解包版通过 |
+| `node test/e2e.js` | 通过：原有 Vue 表单、嵌套跨域 iframe/Canvas、字段模板、双实例、故障恢复、停止及日志脱敏 |
+| `node test/checkpoint-e2e.js` | 通过：检查点等待、超时阻断和取消 |
+| `node test/ui-smoke.js --packaged` | 通过：原主流程录制、检查点、字段模板、双实例启动与巡检、停止和界面无异常 |
+| `npm run dist` | 成功生成 `dist/FlowSentinel-1.3.0-win-x64.exe`，102,874,728 字节 |
+| `node test/portable-smoke.js` | 通过：单文件 EXE 实际解压启动、UI/preload、Chrome 录制、停止及加密保存 |
+
+交付文件 SHA-256：`9BFF4E1242FAB907CB7B608A826BD7B90F499D83AED8A1958FD3D10DC3F9B301`。保留原 1.2.9 EXE，新文件与旧文件并存。
+
+单元测试首次使用系统沙箱临时目录时遇到 Windows rename 权限限制；改用项目 `test-results/tmp` 后全部通过。浏览器测试需要可访问本机 HTTP 的执行环境；受限沙箱返回 ERR_NETWORK_ACCESS_DENIED 后，已在允许本机访问的环境完成上述验收。
+
+验证范围：crontab 按本机时区、当前分钟检查，不补跑错过的分钟；截图持续匹配会每轮触发。真实业务网站未在本次自动验收中访问。测试结果文件位于 `test-results/subflows-*-report.txt`，界面截图位于 `test-results/subflows-ui*.png`。
+
+## 历史 1.1.0 验收记录
 
 日期：2026-10-22（北京时间）
 
@@ -165,3 +201,22 @@ node test/portable-smoke.js
 - npm run dist：成功；node test/portable-smoke.js：通过单文件解压启动、Chrome 录制/停止和加密持久化。
 - 产物：dist/FlowSentinel-1.2.9-win-x64.exe，102868763 字节；SHA-256：E3CB22423803F8B6588E84402814F266AB66992106E8D34520275D42F2003E55。
 - 本次为 UI 筛选变更，未重跑完整回放、图像定位及缓存恢复 E2E；未改动对应引擎代码。
+
+## 1.3.2 秒级定时与界面验收（2026-10-26）
+
+- 单元测试：25/25 通过，新增秒级表达式、旧五段兼容、时间槽去重、失败后重试及六段流程最低导入版本校验。临时目录设为项目 test-results，避开沙箱临时目录的原子重命名限制。
+- node test/subflows-e2e.js：通过真实 Chrome 主流程恢复、录制隔离、截图/定时触发、双实例隔离、独立轮询、秒级重复触发、停止及失败恢复验收。本地 HTTP 测试在沙箱内受到网络限制，改在沙箱外运行通过。
+- node test/subflows-ui.js：源码版通过六段生成、精确到秒的每日时间输入、每秒预设、无效表达式、条件/动作录制、保存/删除、导入导出及两种主题检查。已查看 test-results/subflow-timer-dark.png 和 subflow-timer-light.png；修正浅色背景覆盖下拉箭头问题。
+- 文档同步：README.md 更新用法和精度边界；AGENTS.md 更新模块职责、兼容声明及 1.3.2 源码维护路径。无新模块或依赖。
+- 范围：秒级为条件匹配精度，动作串行、无错过时刻补跑，不承诺硬实时触发；本次未重跑所有 Canvas 图像与缓存恢复 E2E。
+- node test/subflows-ui.js --packaged：通过；已查看最终浅色截图并确认下拉箭头。ASAR 内本次修改的七个生产文件逐字节匹配当前源码。
+- npm run dist：成功；node test/portable-smoke.js：通过单文件解压启动、真实 Chrome 录制/停止、IPC 与加密持久化。产物 dist/FlowSentinel-1.3.2-win-x64.exe，102876811 字节；SHA-256：CB968CA513583332401E87A1912F857CD50EDADEB02A049D1E09CAFA180BA01C。
+
+## 1.3.3 连续录入保留画面验收（2026-10-26）
+
+- npm test：26/26 通过，包含新弹出页编号转换、拒绝引用旧额外页及原草稿不被修改。
+- node test/subflows-e2e.js：通过。真实 Chrome 验证继续新增时浏览器、上下文、页面对象、输入值、页面内变量及 sessionStorage 保留；保存前后草稿隔离；手动导航和填写不录入；确认条件后的动作录入；重复新增弹出页可在双实例回放。已有调度、秒级触发、失败恢复和停止回归通过。
+- node test/subflows-ui.js 及 --packaged：均通过。真实按钮继续录入保留当前页面与输入值，截图取消、条件确认、保存、删除、导入导出通过，无渲染错误。
+- npm run dist：成功；node test/portable-smoke.js：通过单文件解压启动、Chrome 录制/停止、IPC 和加密持久化。ASAR 中本次修改的三个生产文件与源码逐字节相同，包内版本为 1.3.3。
+- 产物：dist/FlowSentinel-1.3.3-win-x64.exe，102876090 字节；SHA-256：465088B696B680C1B8701C09B9AA3C341C62E71C1E37582E342497039779FC15。
+- 初次本地站点测试受沙箱网络限制、初次打包受下载限制，均在获准沙箱外执行后通过。未重跑全部 Canvas 图像与缓存恢复 E2E；本次未修改相关模块。README.md 和 AGENTS.md 已同步行为与维护路径，无新生产模块或依赖。
