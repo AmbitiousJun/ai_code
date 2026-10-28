@@ -61,14 +61,31 @@ function match(screenBuffer, templateBuffer, rect, radius = 12) {
   }
   return best;
 }
-// Trigger conditions may move across seats within this instance's page viewport.
-async function matchTrigger(screenBuffer, templateBuffer, rect, radius, threshold, signal) {
+// Shared exact-origin-first search within the current viewport or Canvas.
+async function matchScreenshot(screenBuffer, templateBuffer, rect, threshold, signal, bounds) {
   const stopped=()=>{if(signal?.aborted)throw new Error('STOPPED');};
   stopped();
-  const local=match(screenBuffer,templateBuffer,rect,radius);
-  if(local.score>=threshold)return {...local,region:'local'};
   const screen=PNG.sync.read(screenBuffer),template=PNG.sync.read(templateBuffer);
   const w=template.width,h=template.height,total=w*h;
+  if(rect.width!==w||rect.height!==h)throw new Error('基准图尺寸不一致');
+  bounds=bounds||{x:0,y:0,width:screen.width,height:screen.height};
+  const minX=Math.max(0,Math.ceil(bounds.x)),minY=Math.max(0,Math.ceil(bounds.y));
+  const maxX=Math.min(screen.width-w,Math.floor(bounds.x+bounds.width-w));
+  const maxY=Math.min(screen.height-h,Math.floor(bounds.y+bounds.height-h));
+  const local={x:Math.round(rect.x),y:Math.round(rect.y),score:0,region:'local',ambiguous:false};
+  if(local.x>=minX&&local.y>=minY&&local.x<=maxX&&local.y<=maxY){
+    let bad=0;
+    for(let y=0;y<h;y++){
+      if(y%32===0){await new Promise(resolve=>setImmediate(resolve));stopped();}
+      for(let x=0;x<w;x++){
+        const a=((local.y+y)*screen.width+local.x+x)*4,b=(y*w+x)*4;
+        if([0,1,2].some(c=>Math.abs(screen.data[a+c]-template.data[b+c])>32))bad++;
+      }
+    }
+    local.score=1-bad/total;
+    if(local.score>=threshold)return local;
+  }
+  if(minX>maxX||minY>maxY)return local;
   const allowed=Math.floor(total*(1-threshold)+1e-9);
   // Necessary colour-count bounds cheaply reject most empty backgrounds.
   // ±32 expansion makes these filters conservative, never a new threshold.
@@ -98,9 +115,9 @@ async function matchTrigger(screenBuffer, templateBuffer, rect, radius, threshol
   for(let n=0;n<total;n++)if(!seen.has(n))offsets.push(n);
   const screenOffsets=offsets.map(n=>(Math.floor(n/w)*screen.width+n%w)*4);
   let best=null;
-  for(let y=0;y<=screen.height-h;y++){
+  for(let y=minY;y<=maxY;y++){
     if(y%8===0){await new Promise(resolve=>setImmediate(resolve));stopped();}
-    for(let x=0;x<=screen.width-w;x++){
+    for(let x=minX;x<=maxX;x++){
       if(filters.some(({table,required})=>table[(y+h)*pitch+x+w]-table[y*pitch+x+w]-table[(y+h)*pitch+x]+table[y*pitch+x]<required))continue;
       let bad=0;
       const origin=(y*screen.width+x)*4;
@@ -118,12 +135,17 @@ async function matchTrigger(screenBuffer, templateBuffer, rect, radius, threshol
   return best?{...best,region:'viewport',ambiguous:false}: {...local,region:'local'};
 }
 
+// Compatibility entry point; radius no longer prioritizes nearby matches.
+function matchTrigger(screenBuffer,templateBuffer,rect,radius,threshold,signal){
+  return matchScreenshot(screenBuffer,templateBuffer,rect,threshold,signal);
+}
+
 // Search only this instance's canvas; yield to keep Stop and other instances responsive.
 async function locateClick(screenBuffer, visual, point, bounds, signal) {
   const fail=code=>{const e=new Error(code);e.code=code;throw e;};
   let screen,template;
   try{screen=PNG.sync.read(screenBuffer);template=PNG.sync.read(Buffer.from(visual.image,'base64'));}catch{fail('VISUAL_INVALID');}
-  if(template.width!==48||template.height!==48||!Number.isFinite(visual.offset?.x)||!Number.isFinite(visual.offset?.y))fail('VISUAL_INVALID');
+  if(template.width<12||template.height<12||template.width>48||template.height>48||!Number.isFinite(visual.offset?.x)||!Number.isFinite(visual.offset?.y))fail('VISUAL_INVALID');
   const w=template.width,h=template.height,threshold=.90;
   let distinct=0;
   for(let i=0;i<template.data.length;i+=4){
@@ -131,48 +153,12 @@ async function locateClick(screenBuffer, visual, point, bounds, signal) {
     if(Math.max(...[0,1,2].map(c=>Math.abs(template.data[i+c]-template.data[c])))>32)distinct++;
   }
   if(distinct<w*h*.08)fail('VISUAL_INVALID');
-  const minX=Math.max(0,Math.ceil(bounds.x)),minY=Math.max(0,Math.ceil(bounds.y));
-  const maxX=Math.min(screen.width-w,Math.floor(bounds.x+bounds.width-w));
-  const maxY=Math.min(screen.height-h,Math.floor(bounds.y+bounds.height-h));
-  const inside=(x,y)=>x>=minX&&y>=minY&&x<=maxX&&y<=maxY;
-  let inset=0;
-  function score(x,y,stride,limit) {
-    let bad=0,total=Math.ceil((w-2*inset)/stride)*Math.ceil((h-2*inset)/stride);
-    for(let j=inset;j<h-inset;j+=stride)for(let i=inset;i<w-inset;i+=stride){
-      const a=((y+j)*screen.width+x+i)*4,b=(j*w+i)*4;
-      if(Math.max(Math.abs(screen.data[a]-template.data[b]),Math.abs(screen.data[a+1]-template.data[b+1]),Math.abs(screen.data[a+2]-template.data[b+2]))>32)bad++;
-      if(bad>total*(1-limit))return 0;
-    }
-    return 1-bad/total;
-  }
-  const original={x:Math.round(point.x-visual.offset.x),y:Math.round(point.y-visual.offset.y)};
-  if(signal?.aborted)throw new Error('STOPPED');
-  async function search(){
-    if(inside(original.x,original.y)&&score(original.x,original.y,1,threshold)>=threshold)return {...point,relocated:false};
-    let best=null;
-    for(let y=minY;y<=maxY;y++){
-      if(y%8===0){await new Promise(resolve=>setImmediate(resolve));if(signal?.aborted)throw new Error('STOPPED');}
-      for(let x=minX;x<=maxX;x++){
-        if(score(x,y,6,.70)<.70)continue;
-        const s=score(x,y,1,threshold);if(s<threshold)continue;
-        if(best&&Math.hypot(x-best.x,y-best.y)>8)fail('VISUAL_AMBIGUOUS');
-        if(!best||s>best.score)best={x,y,score:s};
-      }
-    }
-    if(!best)return null;
-    return {x:best.x+visual.offset.x,y:best.y+visual.offset.y,relocated:true};
-  }
-  const full=await search();if(full)return full;
-  // Ignore animated scenery / scrollbars around a feature-bearing central patch.
-  // Keep the same threshold and ambiguity checks as the full template.
-  inset=8;let features=0;const base=(inset*w+inset)*4;
-  for(let y=inset;y<h-inset;y++)for(let x=inset;x<w-inset;x++){
-    const i=(y*w+x)*4;
-    if(Math.max(...[0,1,2].map(c=>Math.abs(template.data[i+c]-template.data[base+c])))>32)features++;
-  }
-  if(features<32*32*.08)fail('VISUAL_NOT_FOUND');
-  const core=await search();if(!core)fail('VISUAL_NOT_FOUND');
-  return {...core,region:'center'};
+  const rect={x:Math.round(point.x-visual.offset.x),y:Math.round(point.y-visual.offset.y),width:w,height:h};
+  const found=await matchScreenshot(screenBuffer,Buffer.from(visual.image,'base64'),rect,threshold,signal,bounds);
+  if(found.ambiguous)fail('VISUAL_AMBIGUOUS');
+  if(found.score<threshold)fail('VISUAL_NOT_FOUND');
+  if(found.region==='local')return {...point,relocated:false};
+  return {x:found.x+visual.offset.x,y:found.y+visual.offset.y,relocated:true};
 }
 // Diagnostic only: original template at left, current recorded region at right.
 function triggerComparison(screenBuffer, templateBuffer, rect) {
@@ -184,4 +170,4 @@ function triggerComparison(screenBuffer, templateBuffer, rect) {
   PNG.bitblt(screen,output,rect.x,rect.y,template.width,template.height,template.width+8,0);
   return PNG.sync.write(output);
 }
-module.exports = { crop, match, matchTrigger, locateClick, triggerComparison };
+module.exports = { crop, match, matchScreenshot, matchTrigger, locateClick, triggerComparison };

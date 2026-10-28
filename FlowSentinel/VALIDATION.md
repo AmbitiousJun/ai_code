@@ -275,3 +275,48 @@ node test/portable-smoke.js
 - 证据保存在忽略目录 test-results/kaga-live、kaga-live-2、kaga-live-3；仅包含本机诊断，不随安装包分发。临时复制的加密配置已删除，用户原始流程未改写。
 - 全视口搜索在本机该真实截图约 1.65 秒，比局部匹配慢；轮询会等待搜索完成。搜索主动让出并支持停止。最终巡检和中途检查点不改为全视口搜索。
 - 最终 npm run dist 成功；node test/portable-smoke.js 通过。产物 dist/FlowSentinel-1.4.4-win-x64.exe，102878614 字节。AGENTS.md、README.md、版本文件与本验收记录已同步。
+
+
+## 2026-10-28 · 1.4.5 统一截图匹配
+
+- npm test：37/37 通过。临时目录设为项目 test-results，避开沙箱默认临时目录的重命名权限限制。新增精确原位优先、附近与远处重复目标、完整模板阈值边界、主／子检查点跨位置、缺失／歧义阻断和取消回归；中央裁剪测试更新为完整模板未通过时拒绝定位。
+- node test/unified-vision-e2e.js：通过。真实 Chrome 验证位移后的主检查点、最终巡检、截图子流程触发及子检查点均通过；原位有匹配时优先原位；原位无匹配且有多个目标时最终巡检判失败。
+- node test/visual-e2e.js：通过。覆盖点击前采集、跨域 iframe、位移、并发、缺失／多目标／损坏图回退原坐标、取消不点击。
+- node test/checkpoint-e2e.js、node test/subflows-e2e.js、node test/repeat-e2e.js：通过，覆盖检查点等待和超时阻断、停止、子流程恢复与隔离、连续同点点击和双实例。
+- node test/e2e.js：通过，验证真实表单录制、随机值、双实例巡检、故障恢复、证据、停止与日志脱敏。
+- node test/ui-smoke.js --packaged：通过，验证新解包版 GUI、真实录制／回放、加密保存、图片预览／放大、日志和渲染器无异常。
+- 浏览器回归使用本地测试服务器；沙箱内 localhost 被阻止，改用授权执行后通过。未运行用户线上游戏或修改用户已保存流程，未重跑所有历史专项测试。
+- npm run dist：通过。初次沙箱构建受 DNS 限制，授权构建成功。node test/portable-smoke.js：通过，实际单文件 EXE 解压、启动、录制、停止及加密保存正常。
+- 发布文件：dist/FlowSentinel-1.4.5-win-x64.exe，102877378 字节；SHA-256：`fa45893ddf198ae4dc1b6092cb1902dbf64afe399717bed81aba66283f06deb3`。
+
+
+## 1.4.6 严格 Canvas／iframe 点击（2026-10-28）
+
+- npm test：38 项单元测试通过。Windows 沙箱临时目录首次 Store rename 被拒后，TEMP/TMP 指向项目 test-results/tmp 重跑通过。
+- node test/visual-e2e.js：真实 Chrome 点击前 12×12 采集、跨域 Canvas、缩放画布、两个独立上下文原位与位移匹配、WebGL；无目标、多目标、缺失／损坏标记、截图异常和停止均不点击。
+- node test/strict-clicks-e2e.js：双层跨域 iframe 普通点击标记与坐标、原位及位移回放、内嵌基础步骤和 SubflowScheduler；缺失或多目标阻断点击与后续表单填写。
+- node test/repeat-e2e.js：每次连续点击重新截图匹配；按钮变色后第二次点击失败；恢复图案可继续；两个 Runner 实例分别失败，无坐标复用及多余业务点击。
+- node test/capture-e2e.js：透明 Canvas、跨域污染、低特征提示、静态 WebGL、点击前合成帧与 iframe 坐标裁剪。
+- node test/e2e.js：Vue 表单、嵌套 iframe 复选框、Canvas 拖动、双实例、变量隔离、巡检失败恢复、停止和日志截图。
+- npm run dist：成功生成 dist/FlowSentinel-1.4.6-win-x64.exe。
+- node test/ui-smoke.js --packaged：打包版 GUI、12×12 缩略图、双实例真实回放、截图日志和持久化通过。
+- node test/base-flows-ui.js --packaged：基础分类、限制、嵌入准备、模板继承、导入导出通过。旧测试要求显示 radius，与 1.4.5 已隐藏该控件冲突，更新断言后通过。
+- node test/portable-smoke.js：单文件 EXE 解压启动、GUI/preload、启动真实 Chrome 录制、停止及加密保存通过。
+
+未在用户线上业务站点执行点击，未修改已存储的用户流程。旧的无标记 Canvas／iframe 点击需要重新录制；12×12 重复纹理或低特征可能失败，不能保证任意图案都可唯一定位。保留原位优先及 8px 同目标候选归并语义。生产源码无新增依赖或模块，新增测试目录项已同步 AGENTS.md。
+
+
+## 1.4.7 点击图像回退验收（2026-10-28）
+
+- npm test：38/38 通过。首次沙箱内运行因临时文件 rename 权限失败；沙箱外重跑全部通过。
+- node test/visual-e2e.js：通过。真实 Chrome 验证 12×12 点击前标记、Canvas 原位／位移、重复目标／缺失／损坏模板回退录制坐标、跨域 iframe、WebGL、并发隔离；截图异常和取消不点击。
+- node test/strict-clicks-e2e.js：通过。嵌套跨域 iframe 记录 clickPoint 和 12×12 标记，基础流程及子流程均在无匹配／多目标时回退精确录制坐标，后续填写继续；缺少坐标仍报错。保留历史测试文件名。
+- node test/repeat-e2e.js：通过。重复点击每次截图；图案改变后回退原坐标；恢复图案后重新定位；两个 Runner 实例各执行九次点击，其中八次回退，无坐标复用。
+- node test/checkpoint-e2e.js、node test/capture-e2e.js：通过。检查点超时／停止和合成帧点击前采集保持原行为。
+- npm run test:e2e：通过。表单、嵌套 iframe 勾选、Canvas 拖动、双实例、异常恢复、停止与日志验收。
+- node test/ui-smoke.js、node test/ui-smoke.js --packaged：通过。源码版和解包版 GUI 验收。
+- npm run dist：通过，生成 dist/FlowSentinel-1.4.7-win-x64.exe。核对 app.asar 中版本及 engine.js 与源码一致（忽略空白格式）。
+
+Evidence → Finding → Path：test-results/visual-report.txt、strict-clicks-report.txt、repeat-report.txt 的实际点击坐标／次数断言 → 三类流程共用原位优先、唯一重定位、原坐标回退 → src/engine.js 的 visualClick/replayStep；录制继续由 recorder-script.js/capture.js 提供最小标记。未改写本机用户流程。
+
+- node test/portable-smoke.js：通过。1.4.7 单文件 EXE 解压启动、UI/preload、真实 Chrome 录制／停止及加密持久化通过。产物大小 102877862 字节，SHA-256：2D49421A3D8AD1DD4882524DE63BF88DEC33056EF76B7717E6CB80A0A4DBC7AC。

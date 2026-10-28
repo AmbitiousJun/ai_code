@@ -3,7 +3,7 @@ const { EventEmitter } = require('events');
 const { installRecorder } = require('./recorder-script');
 const {ClickCapture}=require('./capture');
 const {RepeatClicks}=require('./repeat-clicks');
-const { match, crop, locateClick } = require('./vision');
+const { matchScreenshot, crop, locateClick } = require('./vision');
 const {fieldId,generateValues}=require('./variables');
 const fs = require('fs');
 const path = require('path');
@@ -197,12 +197,56 @@ async function waitForCheckpoint(page,step,cfg,signal,onSample=()=>{}) {
   while(Date.now()<end) {
     check(signal);
     lastShot=await page.screenshot({timeout:Math.max(1,Math.min(cfg.stepTimeout,end-Date.now())),caret:'hide'});check(signal);
-    lastScore=match(lastShot,reference,step.trusted.rect,cfg.radius).score;
+    const found=await matchScreenshot(lastShot,reference,step.trusted.rect,step.threshold??cfg.threshold,signal);
+    lastScore=found.score;
     onSample(lastScore);
-    if(lastScore>=(step.threshold??cfg.threshold))return {score:lastScore};
+    if(!found.ambiguous&&lastScore>=(step.threshold??cfg.threshold))return found;
     await sleep(Math.min(500,Math.max(0,end-Date.now())),signal);
   }
   const error=new Error('检查点等待超时');error.code='CHECKPOINT_TIMEOUT';error.lastShot=lastShot;error.score=lastScore;throw error;
+}
+
+async function frameOrigin(frame) {
+  let x=0,y=0;
+  while(frame.parentFrame()){
+    const handle=await frame.frameElement();
+    const offset=await handle.evaluate(e=>{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return {x:r.x+parseFloat(s.borderLeftWidth)+parseFloat(s.paddingLeft),y:r.y+parseFloat(s.borderTopWidth)+parseFloat(s.paddingTop)};});
+    await handle.dispose();x+=offset.x;y+=offset.y;frame=frame.parentFrame();
+  }
+  return {x,y};
+}
+async function visibleBounds(frame, box) {
+  let bounds=box;
+  while(frame){
+    const origin=await frameOrigin(frame),size=await frame.evaluate(()=>({width:innerWidth,height:innerHeight}));
+    const r={...origin,...size};
+    if(!bounds)bounds=r;
+    else {const x=Math.max(bounds.x,r.x),y=Math.max(bounds.y,r.y);bounds={x,y,width:Math.max(0,Math.min(bounds.x+bounds.width,r.x+r.width)-x),height:Math.max(0,Math.min(bounds.y+bounds.height,r.y+r.height)-y)};}
+    frame=frame.parentFrame();
+  }
+  return bounds;
+}
+async function visualClick(page,step,original,bounds,signal,onVisual){
+  check(signal);
+  if(!Number.isFinite(original.x)||!Number.isFinite(original.y)){
+    const error=new Error('缺少录制点击坐标，请重新录制');error.code='VISUAL_INVALID';throw error;
+  }
+  let found;
+  try {
+    if(!step.visual||step.visualError){
+      const error=new Error('点击参考图像缺失或无效，请重新录制');error.code='VISUAL_INVALID';throw error;
+    }
+    const shot=await page.screenshot({caret:'hide'});check(signal);
+    found=await locateClick(shot,step.visual,original,bounds,signal);check(signal);
+  }catch(error){
+    check(signal);
+    if(page.isClosed()||!['VISUAL_INVALID','VISUAL_NOT_FOUND','VISUAL_AMBIGUOUS'].includes(error.code))throw error;
+    const reason={VISUAL_INVALID:'点击图像不可用',VISUAL_NOT_FOUND:'未找到点击图像',VISUAL_AMBIGUOUS:'点击图像存在多个目标'}[error.code];
+    onVisual(reason+'，回退录制原坐标 ('+original.x.toFixed(1)+', '+original.y.toFixed(1)+')','warn');
+    return {...original,relocated:false};
+  }
+  onVisual((found.relocated?'点击图像已重新定位':'点击图像原位置校验通过')+'，点击坐标 ('+found.x.toFixed(1)+', '+found.y.toFixed(1)+')','info');
+  return found;
 }
 
 async function replayStep(page, step, signal, onVisual=()=>{}, repeats) {
@@ -216,9 +260,23 @@ async function replayStep(page, step, signal, onVisual=()=>{}, repeats) {
   const el=step.selector?frame.locator(step.selector):null;
   switch(step.type) {
     case 'fill': await el.fill(step.value);break;
-    case 'check': await el.setChecked(step.checked);break;
+    case 'check':
+      if(!step.frame?.length){await el.setChecked(step.checked);break;}
+      // Frame checkbox/radio activation shares the visual lookup and fallback.
+      if(await el.isChecked()===step.checked)break;
+      // falls through
+
+    case 'click': {
+      if(step.frame?.length){
+        const bounds=await visibleBounds(frame);
+        const origin=await frameOrigin(frame);
+        const original={x:origin.x+step.clickPoint?.x,y:origin.y+step.clickPoint?.y};
+        const found=await visualClick(page,step,original,bounds,signal,onVisual);
+        check(signal);await page.mouse.click(found.x,found.y,{button:step.button||'left',clickCount:step.count||1});
+      }else await el.click({button:step.button||'left',clickCount:step.count||1});
+      break;
+    }
     case 'select': await el.selectOption(step.values);break;
-    case 'click': await el.click({button:step.button||'left',clickCount:step.count||1});break;
     case 'hover': await el.hover();break;
     case 'wheel': {await el.scrollIntoViewIfNeeded();const box=await el.boundingBox();if(!box)throw new Error('Canvas 不可见');await page.mouse.move(box.x+step.x*box.width,box.y+step.y*box.height);await page.mouse.wheel(step.deltaX,step.deltaY);break;}
     case 'key':
@@ -232,37 +290,16 @@ async function replayStep(page, step, signal, onVisual=()=>{}, repeats) {
       const box=await canvasBox(frame,el);
       const points=step.points;if(!points.length)break;
       const original={x:box.x+points[0].x*box.width,y:box.y+points[0].y*box.height};
-      const coordinates=p=>'('+p.x.toFixed(1)+', '+p.y.toFixed(1)+')';
-      const fallback=reason=>onVisual(reason+'，回退录制原坐标 '+coordinates(original),'warn');
-      let dx=0,dy=0,confirmed=null;
-      const repeated=await repeats?.reuse(page,frame,el,step,box,original);check(signal);
-      if(repeated){
-        dx=repeated.x-original.x;dy=repeated.y-original.y;confirmed=repeated;
-        onVisual('连续同点点击第 '+repeated.count+' 次，复用本段已确认坐标 '+coordinates(repeated)+'（录制坐标 '+coordinates(original)+'）','info');
+      let dx=0,dy=0;
+      await repeats?.clear();
+      const dragged=points.some(p=>Math.hypot((p.x-points[0].x)*box.width,(p.y-points[0].y)*box.height)>8);
+      if(!dragged){
+        const found=await visualClick(page,step,original,await visibleBounds(frame,box),signal,onVisual);
+        dx=found.x-original.x;dy=found.y-original.y;
       }
-      else if(step.visualError)fallback('录制点击图像不可用');
-      else if(step.visual){
-        let shot;
-        try{shot=await page.screenshot({caret:'hide'});}
-        catch(error){check(signal);if(page.isClosed())throw error;fallback('回放截图失败');}
-        check(signal);
-        if(shot){
-          try{
-            const found=await locateClick(shot,step.visual,original,box,signal);
-            if(found.region==='center')onVisual('完整点击图未匹配，中央 32×32 特征区域校验通过（阈值 90%）','info');
-            dx=found.x-original.x;dy=found.y-original.y;confirmed={x:found.x,y:found.y,count:1};
-            onVisual(found.relocated?'点击图像已重新定位：原坐标 '+coordinates(original)+' → 点击坐标 '+coordinates(found):'点击图像原位置校验通过，点击坐标 '+coordinates(original),'info');
-          }catch(error){
-            check(signal);
-            const reason={VISUAL_NOT_FOUND:'扫描当前画布后未找到匹配图像',VISUAL_AMBIGUOUS:'扫描当前画布发现多个匹配目标',VISUAL_INVALID:'点击参考图像无效或图案特征不足'}[error.code];
-            if(!reason)throw error;
-            fallback(reason);
-          }
-        }
-      }else onVisual('没有点击参考图，使用录制原坐标 '+coordinates(original),'info');
       check(signal);
       const move=point=>page.mouse.move(box.x+point.x*box.width+dx,box.y+point.y*box.height+dy);
-      const clickedElement=confirmed&&repeats?await el.elementHandle():null;
+
       try {
       await move(points[0]);await page.mouse.down({button:step.button});
       try {
@@ -271,10 +308,9 @@ async function replayStep(page, step, signal, onVisual=()=>{}, repeats) {
         }
       } finally {await page.mouse.up({button:step.button});}
       check(signal);
-      if(confirmed)await repeats?.remember(page,frame,el,step,box,original,confirmed,confirmed.count,clickedElement);
-      else await repeats?.clear();
+      await repeats?.clear();
       }catch(error){await repeats?.clear();throw error;}
-      finally{await clickedElement?.dispose().catch(()=>{});}
+
       break;
     }
     default:throw new Error('未知操作：'+step.type);
@@ -362,11 +398,11 @@ class Runner extends EventEmitter {
             if(!page||page.isClosed()||!browser.isConnected())throw new Error('浏览器或目标页面已关闭');
             if(performance.now()>=nextInspection) {
               const shot=await page.screenshot({timeout:cfg.stepTimeout,caret:'hide'});check(signal);
-              const found=match(shot,Buffer.from(trusted.image,'base64'),trusted.rect,cfg.radius);
-              const ok=found.score>=cfg.threshold;
+              const found=await matchScreenshot(shot,Buffer.from(trusted.image,'base64'),trusted.rect,cfg.threshold,signal);
+              const ok=!found.ambiguous&&found.score>=cfg.threshold;
               if(ok){failures=0;healthy++;}else{failures++;healthy=0;}
               this.state(id,ok?'正常运行':'检查未通过',{score:found.score,checkedAt:new Date().toISOString(),failures});
-              this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures),cfg.headless?'data:image/png;base64,'+shot.toString('base64'):undefined);
+              this.log(id,ok?'info':'warn','可信图像匹配 '+(found.score*100).toFixed(1)+'%'+(found.ambiguous?' · 多个匹配目标':found.region==='viewport'?' · 全视口定位 ('+found.x+', '+found.y+')':' · 原位置')+(ok?' · 正常':' · 连续失败 '+failures+'/'+cfg.failures),cfg.headless?'data:image/png;base64,'+shot.toString('base64'):undefined);
               if(healthy>=5)attempts=0;
               if(failures>=cfg.failures) {
                 if(this.evidenceDir){fs.mkdirSync(this.evidenceDir,{recursive:true});fs.writeFileSync(path.join(this.evidenceDir,'instance-'+id+'-last-failure.png'),shot);}

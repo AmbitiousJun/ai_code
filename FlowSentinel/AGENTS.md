@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-27。对应版本：`package.json` 中的 **1.4.4**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-28。对应版本：`package.json` 中的 **1.4.7**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -83,13 +83,15 @@ D:\ai_code\FlowSentinel\
 ├── test/
 │   ├── base-flows.test.js       基础流程限制、嵌入前缀不可变及交换版本测试
 │   ├── base-flows-ui.js         真实 Chrome 基础模板回放、分类、导入导出与打包验收
+│   ├── strict-clicks-e2e.js  嵌套跨域 iframe 标记录制、基础／子流程图像定位与原坐标回退验收
+│   ├── unified-vision-e2e.js   统一截图匹配的真实 Chrome 巡检、检查点与子流程验收
 │   ├── small-trigger.test.js    小图、全视口触发、歧义、取消及诊断回归
 │   ├── trigger-diagnostics-ui.js 子流程对照图日志及放大窗口验收
 │   ├── subflows.test.js         crontab 与子流程协议校验
 │   ├── subflows-e2e.js          真实 Chrome 恢复、触发、隔离、停止和重试验收
 │   ├── subflows-ui.js           源码版及解包版子流程 GUI 验收
 │   ├── repeat.test.js           连续点击识别、图像相似与隔离规则单元测试
-│   ├── repeat-e2e.js            九次点击、按钮变色、重定位、失效及双实例验收
+│   ├── repeat-e2e.js            逐次截图、按钮变色原坐标回退、重定位及双实例验收
 │   ├── capture.test.js          点击前帧选择、后帧排除和资源释放测试
 │   ├── capture-e2e.js           透明叠层、跨域污染 Canvas、低特征图像回归
 │   ├── visual.test.js           点击图像原位、位移、歧义、缺失、取消测试
@@ -107,7 +109,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.4.4-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.4.7-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -123,7 +125,7 @@ D:\ai_code\FlowSentinel\
 | `engine.js` | `waitForCheckpoint()`、`sleep()` | 检查点轮询、超时和可取消等待 |
 | `recorder-script.js` | `installRecorder()` | 元素选择器、输入事件、Canvas 轨迹、滚动和悬停采集 |
 | `variables.js` | `fieldId()`、`fields()`、`validateRules()`、`expand()`、`generateValues()` | 字段归一化、模板语法、随机值生命周期 |
-| `vision.js` | `crop()`、`match()`、`matchTrigger()`、`triggerComparison()` | 裁剪、局部匹配、子流程全视口触发搜索及诊断对照图 |
+| `vision.js` | `crop()`、`matchScreenshot()`、`matchTrigger()`、`locateClick()`、`triggerComparison()` | 裁剪、局部匹配、子流程全视口触发搜索及诊断对照图 |
 | `store.js` | `Store.create/save/get/list/delete` | 持久化格式、文件命名和加密读写 |
 | `ui/app.js` | `config()`、`setConfig()`、`renderDetail()`、`renderStates()`、`capture()` | UI 单位换算、状态更新、字段编辑和截图选择 |
 
@@ -217,7 +219,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.3.3 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.4.7 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -250,9 +252,11 @@ flowchart TD
 
 ## 6. 图像匹配的实现与边界
 
-`crop()` 将矩形坐标取整，校验边界及至少 12 × 12 像素的尺寸。`match()` 在基准位置附近的容差范围搜索：先稀疏采样排序候选，再对前四个候选周围的邻点做逐像素比较。邻点细化可能比粗搜索边界多延伸 1 像素。
+`crop()` 将矩形坐标取整，校验边界及至少 12 × 12 像素。运行时截图匹配统一使用异步 `matchScreenshot()`：完整模板在精确原位置达标则立即返回，否则扫描当前页面可见视口（Canvas 点击限定目标画布可见边界），只接受唯一目标。相距超过 8px 的候选判为歧义；邻近候选视为同一目标。RGB 通道差超过 32 的像素视为不一致，评分为 `1 - 不一致像素数 / 总像素数`。
 
-每个像素的 RGB 最大通道差超过 32 视为不一致；评分为 `1 - 不一致像素数 / 总像素数`。返回 `{score, x, y}`。这是颜色容差模板匹配，不做 OCR、语义识别或缩放旋转适配。此处描述检查点的 `match()`；点击定位由单独的 `locateClick()` 实现。
+全范围搜索先用保守颜色积分计数排除不可能候选，再按完整模板的像素误差预算确认；不使用可能漏检的采样通过率门槛。循环定期让出事件循环并检查取消。`matchTrigger()` 保留为兼容入口并转发共用匹配器；旧同步 `match()` 仅保留局部算法与历史测试，不再用于运行时判定。Canvas 的 `locateClick()` 负责模板有效性、90% 阈值和点击锚点换算，不再执行中央裁剪兜底。
+
+检查点和子流程条件未找到或歧义时继续等待，最终巡检累计失败；Canvas 和 iframe 点击无匹配、多目标或标记无效时回退该步骤录制原坐标；不会复用上次点击坐标。不会因纯截图校验失败产生业务点击。不支持 OCR、语义、缩放、旋转或不可见内容搜索。
 
 应选稳定、独特的图标内部，避开动态光晕、动画背景和可变文本。单个静态标志仍存在只能证明选定画面存在，不能证明后台业务有心跳。Canvas 布局变化、iframe 路径变化、页面创建顺序变化都可能使旧流程失效。
 
@@ -268,7 +272,7 @@ flowchart TD
 | `failures` | 3 | 触发恢复的连续巡检失败次数 |
 | `retries` | 5 | 恢复次数上限，0 表示不恢复 |
 | `grace` | 5 | 全部步骤完成后的稳定等待，秒 |
-| `radius` | 12 | 图像位置搜索容差，像素 |
+| `radius` | 12 | 旧版兼容字段；当前统一全范围搜索不使用，GUI 隐藏 |
 | `stepTimeout` | 15000 | 普通操作及导航超时，毫秒 |
 | `maxStepDelay` | 10000 | 保留录制间隔时的单步等待上限，毫秒 |
 | `ignoreRecordedDelays` | true | 忽略用户录制时的步骤间停顿 |
@@ -369,7 +373,7 @@ node test/portable-smoke.js
 | `main.js` 的 BrowserWindow、IPC handler 与 `command()` | GUI 和系统操作通过受限 IPC 分离 | 先读 main，再读 preload 和 ui/app |
 | `engine.js` 的 `Recorder.start/append/snapshot` | 注入采集、事件归并、框选暂停和自动保存事件协同 | 结合 recorder-script 和 Store 阅读 |
 | `Runner.run()` 中条件式 `chromium.launch()` 与每轮 `generateValues()` | 并发实例隔离，恢复优先复用上下文缓存并重新生成字段值 | 结合 variables 和恢复分支阅读 |
-| `waitForCheckpoint()` 与 `vision.match()` | 用局部模板匹配等待画面，不依赖录制停顿判断就绪 | 结合 checkpoint-e2e 验证超时和停止 |
+| `waitForCheckpoint()` 与 `vision.matchScreenshot()` | 用原位优先、全视口唯一匹配等待画面，不依赖录制停顿判断就绪 | 结合 checkpoint-e2e 验证超时和停止 |
 | `Store.save()` 与主进程 `safeStorage` 注入 | 流程整体加密后落盘，数据独立于源码 | 结合 README 的数据目录说明阅读 |
 
 本文为源码梳理，不新增测试执行结论；已执行的功能验收记录见 [VALIDATION.md](VALIDATION.md)，日常使用说明见 [README.md](README.md)。
@@ -555,3 +559,31 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 未触发日志标明“等待触发（不代表执行失败）”，附原位容差、全视口扫描及歧义提示。vision.js/triggerComparison 生成左侧录制模板、右侧当前原位区域的对照图；engine.js 转发日志图片，沿用主进程/UI 的 64 张、24MiB 内存上限及放大窗口，不将图片写入 activity.log。
 - 实测修复后左侧触发匹配 100%，Canvas 点击从 (897,557) 重定位至 (180,557)，子流程完成并开启自动攻击。诊断脚本和业务截图只存忽略目录 test-results，不打包用户数据，不改写用户原流程。
 - 无新增生产模块、依赖、IPC 或流程字段；新增 test/trigger-diagnostics-ui.js 验证真实日志图片从 Runner 到 GUI 的转发、放大、刷新恢复与磁盘日志不含图像。测试目录树已同步；完整验收范围见 VALIDATION.md。
+
+
+## 30. 1.4.5 统一截图匹配
+
+- Evidence → Finding → Path：test/small-trigger.test.js、test/visual.test.js 和 test/unified-vision-e2e.js 覆盖精确原位优先、邻近与远处重复、跨视口位移、阈值边界、取消和失败阻断 → 巡检、主／子流程检查点、截图触发与 Canvas 点击共用匹配语义 → 算法维护 vision.js/matchScreenshot，巡检与检查点维护 engine.js，触发诊断维护 subflows.js。
+- 原位达标直接通过；原位失败后仅唯一目标通过。无匹配或歧义时检查点等待／超时、巡检累计失败、截图子流程不触发；Canvas 点击回退原坐标。连续同点点击保留 RepeatClicks 已确认锚点复用。纯截图条件不产生点击。
+- Canvas 去除中央 32×32 二次匹配及稀疏采样 70% 门槛，使用完整 48×48 模板与 90% 阈值；全范围扫描保留 RGB 容差 32、8px 邻近候选归并及可取消等待。每实例仅读取自己的页面。
+- 旧 radius 字段保留兼容但不再影响运行时匹配，UI 隐藏该控件。无新增生产模块、依赖、IPC 或持久化字段；新增真实浏览器测试文件并同步目录树。旧流程无需迁移。
+- 分发产物为 dist/FlowSentinel-1.4.5-win-x64.exe。实际验证结果见 VALIDATION.md；历史章节描述各版本当时行为，第 32 节及第 6 节为当前算法。
+
+
+## 31. 1.4.6 Canvas 与 iframe 严格图像点击
+
+- Evidence → Finding → Path：visual-e2e.js、strict-clicks-e2e.js、repeat-e2e.js 验证原位、唯一位移、多目标、缺失、损坏、截图异常和重复点击 → 所有 Canvas 短点击、子 iframe 的 click/check 统一在 engine.js/visualClick 校验后点击 → 全流程 Runner、基础流程嵌入准备及子流程 executeSteps 共用 replayStep。失败抛出 VISUAL_*，进入已有恢复策略，当前回放不执行后续步骤。
+- recorder-script.js 在 pointerdown 采集点击前标记，新标记 12×12 CSS 像素，为 crop 支持的最小尺寸；Canvas 优先同步读回，失败使用 capture.js 合成帧；iframe 普通点击使用合成帧，并保存文档视口坐标 clickPoint。小图不能保证独特，低特征图需重录，重复图案按歧义失败。拖动仍保留轨迹，表单填写及选项设置不转换为图像点击。
+- 原位达标优先；否则扫描目标 Canvas 可见范围，iframe DOM 点击扫描所属 frame 可见视口。visibleBounds 与 frameOrigin 将嵌套 iframe 坐标转换到顶层并与各祖先视口取交集；不扫描其他 frame。保持 90% 阈值、RGB 容差 32 和相距 8px 的同目标候选归并；不支持缩放／旋转 iframe。
+- 每次点击重新截图校验，取消连续点击的已确认坐标复用；RepeatClicks 模块暂留兼容测试，运行路径仅清空状态。缺少模板、visualError、损坏图像、截图异常、无匹配或多目标均失败，不产生回退点击。旧有效 48×48 模板仍支持；缺图或缺 clickPoint 的旧 iframe 点击需重新录制，不改写用户存储。
+- flow-transfer.js 对包含 Canvas 或 iframe click/check 的导出声明最低导入版本 1.4.6，防止旧版本回退语义继续执行新流程。无新增生产模块、依赖或 IPC。新增测试文件已同步目录树；主界面提示改为失败且需重录。
+- 1.2.x–1.4.5 章节为历史行为，涉及原坐标回退和连续点击复用的描述已由本节取代。分发产物 dist/FlowSentinel-1.4.6-win-x64.exe；执行结果见 VALIDATION.md。
+
+
+## 32. 1.4.7 Canvas 与 iframe 点击回退
+
+- Evidence → Finding → Path：visual-e2e.js、strict-clicks-e2e.js、repeat-e2e.js 覆盖 Canvas、嵌套跨域 iframe、基础流程、子流程及双实例 → 各入口共用 engine.js/replayStep 与 visualClick → 原位置匹配优先，否则扫描目标 Canvas 或所属 iframe 的完整可见范围；唯一匹配点击新位置，无匹配或歧义点击该步骤录制原坐标并继续。
+- 录制继续使用 12×12 CSS 像素点击前标记，为现有裁剪／扫描支持的最小尺寸。Canvas 同步读取与合成帧兜底、iframe 合成帧及 clickPoint 保持不变。匹配阈值 90%、通道容差 32、8px 候选归并保持不变。
+- 标记缺失、损坏、低特征或旧 visualError 同样回退，日志记录原因及坐标；没有有效原坐标的旧 iframe 步骤需重录。截图异常、停止、页面关闭及实际操作异常继续中止，不被匹配回退吞掉。检查点、巡检、子流程触发条件不产生回退点击。
+- 每次短点击独立截图和定位；不复用上次点击坐标；拖动保留录制轨迹。无新增生产模块、依赖、IPC 或数据字段。UI 提示、交换最低导入版本更新为对应的 1.4.7 行为。第 31 节严格失败行为为历史记录，由本节取代。
+- 分发文件：dist/FlowSentinel-1.4.7-win-x64.exe；验证命令及结果见 VALIDATION.md。

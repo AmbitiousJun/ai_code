@@ -42,14 +42,14 @@ class ClickCapture {
     const x=point.x+ox,y=point.y+oy,r=point.rect;
     const left=Math.max(0,Math.ceil(r.x+ox)),top=Math.max(0,Math.ceil(r.y+oy));
     const right=Math.min(png.width,Math.floor(r.x+ox+r.width)),bottom=Math.min(png.height,Math.floor(r.y+oy+r.height));
-    if(right-left<48||bottom-top<48||x<left||x>=right||y<top||y>=bottom)throw new Error('点击区域不可见，请滚动到完整按钮后重新录制');
-    const rect={x:Math.max(left,Math.min(right-48,Math.round(x-24))),y:Math.max(top,Math.min(bottom-48,Math.round(y-24))),width:48,height:48};
+    if(right-left<12||bottom-top<12||x<left||x>=right||y<top||y>=bottom)throw new Error('点击区域不可见，请滚动到完整按钮后重新录制');
+    const rect={x:Math.max(left,Math.min(right-12,Math.round(x-6))),y:Math.max(top,Math.min(bottom-12,Math.round(y-6))),width:12,height:12};
     const image=crop(buffer,rect).buffer;
     // Preserve a visible low-texture thumbnail too. The matcher must still
     // reject such templates; do not mislabel a readable image as capture failure.
     const pixels=PNG.sync.read(image).data;let distinct=0;
     for(let i=0;i<pixels.length;i+=4)if(Math.max(Math.abs(pixels[i]-pixels[0]),Math.abs(pixels[i+1]-pixels[1]),Math.abs(pixels[i+2]-pixels[2]))>32)distinct++;
-    return {visual:{image:image.toString('base64'),offset:{x:x-rect.x,y:y-rect.y},width:48,height:48,source:'compositor'},visualError:distinct<48*48*.08?'截图已获取，但图案特征不足，请点击文字或图标重新录制':undefined};
+    return {visual:{image:image.toString('base64'),offset:{x:x-rect.x,y:y-rect.y},width:12,height:12,source:'compositor'},visualError:distinct<12*12*.08?'截图已获取，但图案特征不足，请点击文字或图标重新录制':undefined};
   }
   async close(){
     const states=[...this.pages.values()];this.pages.clear();

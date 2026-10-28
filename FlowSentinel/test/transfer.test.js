@@ -11,5 +11,12 @@ test('round trip retains checkpoint, visual, variables and per-instance settings
  const {fieldId}=require('../src/variables');const fill={type:'fill',selector:'#name',page:0,frame:[],value:'original'};
  const image={rect:{x:0,y:0,width:12,height:12},image:'png-base64',page:0};
  const rich={...flow,config:{count:3,chromePath:'C:/Chrome/chrome.exe'},trusted:image,steps:[fill,{type:'checkpoint',trusted:image,timeout:60000,threshold:0.9},{type:'canvas',selector:'canvas',points:[{x:0.5,y:0.5,t:0}],visual:{image:'preview',offset:{x:24,y:24},width:48,height:48}}],variables:{[fieldId(fill)]:{mode:'template',template:'user_{{digits:6}}'}}};
- assert.deepEqual(validateFlow(decode(encode(rich,'1.2.7'),'1.2.7')),rich);
+ assert.deepEqual(validateFlow(decode(encode(rich,'1.4.7'),'1.4.7')),rich);
+});
+
+
+test('iframe fallback clicks require the current replay semantics',()=>{
+ const strict={...flow,subflows:[{id:'s',name:'s',trigger:{type:'cron',expression:'* * * * *'},steps:[{type:'click',selector:'#button',frame:['iframe'],clickPoint:{x:20,y:20},visual:{image:'marker',offset:{x:6,y:6},width:12,height:12}}]}]};
+ const text=encode(strict,'1.4.7');assert.equal(JSON.parse(text).minImporterVersion,'1.4.7');
+ assert.throws(()=>decode(text,'1.4.6'),/最低导入版本/);assert.deepEqual(decode(text,'1.4.7'),strict);
 });

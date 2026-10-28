@@ -36,7 +36,10 @@ function installRecorder() {
   document.addEventListener('input', e => {
     const el = target(e);
     if (!editable(el) || el.type === 'file') return;
-    if (['checkbox', 'radio'].includes(el.type)) send({ type: 'check', selector: selector(el), checked: el.checked });
+    if (['checkbox', 'radio'].includes(el.type)) {
+      const entry=clickData(e);
+      send({ type: 'check', selector: selector(el), checked: el.checked,clickPoint:entry.clickPoint },entry.visualPromise);
+    }
     else if (el.tagName === 'SELECT') send({ type: 'select', selector: selector(el), values: [...el.selectedOptions].map(x => x.value) });
     else send({ type: 'fill', selector: selector(el), fieldName: el.getAttribute('aria-label') || el.labels?.[0]?.textContent?.trim().slice(0,60) || el.getAttribute('placeholder') || el.name || el.id || selector(el), value: el.isContentEditable ? el.textContent : el.value, secret: el.type === 'password' });
   }, true);
@@ -47,9 +50,17 @@ function installRecorder() {
   document.addEventListener('click', e => {
     const el = target(e);
     if (!el || el.tagName === 'CANVAS' || el.tagName === 'SELECT' || ['checkbox','radio'].includes(el.type)) return;
-    send({ type: 'click', selector: selector(el), button: 'left', count: e.detail > 1 ? 2 : 1 });
+    const entry=clickData(e);
+    send({ type: 'click', selector: selector(el), button: 'left', count: e.detail > 1 ? 2 : 1, clickPoint:entry.clickPoint },entry.visualPromise);
   }, true);
   let gesture = null;
+  let frameClick = null;
+  const inFrame = window !== window.top;
+  const clickData = e => {
+    if(!inFrame)return {};
+    const entry=frameClick;frameClick=null;
+    return entry&&entry.target===target(e)?entry:{visualPromise:Promise.resolve({visualError:'缺少点击前画面，请重新录制'})};
+  };
   // Read before game handlers; compositor frames cover unreadable WebGL and layers.
   function patch(el, x, y) {
     const r=el.getBoundingClientRect(), style=getComputedStyle(el);
@@ -57,22 +68,29 @@ function installRecorder() {
     const top=r.top+parseFloat(style.borderTopWidth)+parseFloat(style.paddingTop);
     const width=el.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
     const height=el.clientHeight-parseFloat(style.paddingTop)-parseFloat(style.paddingBottom);
-    if(width<48||height<48)return null;
-    const px=Math.max(0,Math.min(width-48,Math.round(x-left-24)));
-    const py=Math.max(0,Math.min(height-48,Math.round(y-top-24)));
-    const c=document.createElement('canvas');c.width=48;c.height=48;
+    if(width<12||height<12)return null;
+    const px=Math.max(0,Math.min(width-12,Math.round(x-left-6)));
+    const py=Math.max(0,Math.min(height-12,Math.round(y-top-6)));
+    const c=document.createElement('canvas');c.width=12;c.height=12;
     const ctx=c.getContext('2d',{willReadFrequently:true});
-    ctx.drawImage(el,px*el.width/width,py*el.height/height,48*el.width/width,48*el.height/height,0,0,48,48);
-    const pixels=ctx.getImageData(0,0,48,48).data;
+    ctx.drawImage(el,px*el.width/width,py*el.height/height,12*el.width/width,12*el.height/height,0,0,12,12);
+    const pixels=ctx.getImageData(0,0,12,12).data;
     let opaque=0,distinct=0;
     for(let i=0;i<pixels.length;i+=4){if(pixels[i+3]>240)opaque++;if(Math.max(Math.abs(pixels[i]-pixels[0]),Math.abs(pixels[i+1]-pixels[1]),Math.abs(pixels[i+2]-pixels[2]))>32)distinct++;}
-    if(opaque<48*48*.95||distinct<48*48*.08)return null;
-    return {image:c.toDataURL('image/png').split(',')[1],offset:{x:x-left-px,y:y-top-py},width:48,height:48};
+    if(opaque<12*12*.95||distinct<12*12*.08)return null;
+    return {image:c.toDataURL('image/png').split(',')[1],offset:{x:x-left-px,y:y-top-py},width:12,height:12};
   }
   document.addEventListener('pointerdown', e => {
     clearTimeout(hoverTimer);
     const el = target(e);
-    if (paused || el?.tagName !== 'CANVAS') return;
+    if(paused)return;
+    if(el?.tagName!=='CANVAS'){
+      if(inFrame){
+        const point={x:e.clientX,y:e.clientY,at:Date.now(),rect:{x:0,y:0,width:innerWidth,height:innerHeight}};
+        frameClick={target:el,clickPoint:{x:e.clientX,y:e.clientY},visualPromise:window.__flowVisual(point).catch(()=>({visualError:'未能获取点击前画面，请重新录制'}))};
+      }
+      return;
+    }
     const r = el.getBoundingClientRect();
     gesture = { type: 'canvas', selector: selector(el), button: ['left', 'middle', 'right'][e.button] || 'left', points: [], started: performance.now(), rect: r };
     try{gesture.visual=patch(el,e.clientX,e.clientY);}catch{}
@@ -102,7 +120,10 @@ function installRecorder() {
   }, true);
   document.addEventListener('contextmenu', e => {
     const el = target(e);
-    if (el?.tagName !== 'CANVAS') send({ type: 'click', selector: selector(el), button: 'right', count: 1 });
+    if (el?.tagName !== 'CANVAS') {
+      const entry=clickData(e);
+      send({ type: 'click', selector: selector(el), button: 'right', count: 1, clickPoint:entry.clickPoint },entry.visualPromise);
+    }
   }, true);
   document.addEventListener('wheel', e => {
     const el=target(e);if(el?.tagName!=='CANVAS')return;

@@ -56,3 +56,33 @@ test('trigger conservative colour filters retain threshold-boundary matches',asy
  const result=await matchTrigger(PNG.sync.write(screen),f.template,{x:0,y:0,width:12,height:27},0,.75);
  assert.equal(result.score,.75);assert.equal(result.x,60);assert.equal(result.y,40);
 });
+
+
+test('exact origin wins, nearby match cannot bypass global ambiguity',async()=>{
+ const {matchScreenshot}=require('../src/vision'),f=fixture(),ref=PNG.sync.read(f.template);
+ const screen=new PNG({width:180,height:120});screen.data.fill(255);
+ PNG.bitblt(ref,screen,0,0,12,27,21,20);PNG.bitblt(ref,screen,0,0,12,27,130,70);
+ const shot=PNG.sync.write(screen);
+ assert.equal((await matchScreenshot(shot,f.template,{x:20,y:20,width:12,height:27},.9)).ambiguous,true);
+ const local=await matchScreenshot(shot,f.template,{x:21,y:20,width:12,height:27},.9);
+ assert.equal(local.region,'local');assert.equal(local.ambiguous,false);
+});
+
+test('main and subflow checkpoints accept moved target, block missing/duplicate targets, and cancel',async()=>{
+ const {waitForCheckpoint,config}=require('../src/engine'),{executeSteps}=require('../src/subflows');
+ const f=fixture(),cfg=config({actionInterval:0,checkpointTimeout:1000,threshold:.9});
+ const step={type:'checkpoint',timeout:1000,trusted:{rect:{...f.rect,x:140,y:70},image:f.template.toString('base64')}};
+ let shot=f.screen,clicks=0;
+ const page={isClosed:()=>false,screenshot:async()=>shot,setDefaultTimeout:()=>{},setDefaultNavigationTimeout:()=>{},mainFrame:()=>page,locator:()=>({click:async()=>clicks++})};
+ const signal=new AbortController().signal;
+ assert.equal((await waitForCheckpoint(page,step,cfg,signal)).x,85);
+ const flow={steps:[step,{type:'click',selector:'#next'}]};
+ await executeSteps(flow,new Map([[0,page]]),cfg,signal);assert.equal(clicks,1);
+ const duplicate=PNG.sync.read(f.screen);PNG.bitblt(PNG.sync.read(f.template),duplicate,0,0,12,27,5,70);shot=PNG.sync.write(duplicate);
+ step.timeout=100;
+ await assert.rejects(executeSteps(flow,new Map([[0,page]]),cfg,signal),{code:'CHECKPOINT_TIMEOUT'});assert.equal(clicks,1);
+ duplicate.data.fill(255);shot=PNG.sync.write(duplicate);
+ await assert.rejects(waitForCheckpoint(page,step,cfg,signal),{code:'CHECKPOINT_TIMEOUT'});
+ const controller=new AbortController();setImmediate(()=>controller.abort());
+ await assert.rejects(waitForCheckpoint(page,step,cfg,controller.signal),/STOPPED/);
+});

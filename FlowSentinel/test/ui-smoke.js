@@ -63,7 +63,7 @@ const {fixture}=require('./fixture');const {randomUUID}=require('crypto');const 
   const visualEncrypted=await app.evaluate(({safeStorage},f)=>safeStorage.encryptString(JSON.stringify(f)).toString('base64'),visualFlow);
   fs.writeFileSync(path.join(data,'flows',visualFlow.id+'.flow'),Buffer.from(visualEncrypted,'base64'));
   await page.reload();await page.getByRole('button',{name:'位移点击验收',exact:false}).click();
-  await page.waitForFunction(()=>document.querySelector('.click-preview')?.naturalWidth===48);
+  await page.waitForFunction(()=>document.querySelector('.click-preview')?.naturalWidth===12);
   await page.screenshot({path:packaged?'test-results/visual-preview-packaged.png':'test-results/visual-preview.png'});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.deepEqual(errors,[]);

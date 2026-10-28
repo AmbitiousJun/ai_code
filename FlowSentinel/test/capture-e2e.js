@@ -24,8 +24,8 @@ async function until(fn){for(let i=0;i<100;i++){if(await fn())return;await sleep
    const step=flow.steps.find(s=>s.type==='canvas');assert.equal(step?.visual?.source,'compositor',mode);assert.equal(step.frame.length,1);
    if(mode==='flat'){assert.match(step.visualError,/特征不足/);continue;}
    assert.equal(step.visualError,undefined,mode);
-   const pixels=PNG.sync.read(Buffer.from(step.visual.image,'base64'));const unique=new Set();for(let i=0;i<pixels.data.length;i+=4)unique.add(pixels.data[i]);assert.ok(unique.size>5,'not post-click black frame');
-   const expected=crop(before,{x:b.x+110-24,y:b.y+110-24,width:48,height:48});assert.deepEqual(pixels.data,PNG.sync.read(expected.buffer).data,'viewport and iframe coordinate alignment');
+   const pixels=PNG.sync.read(Buffer.from(step.visual.image,'base64'));const unique=new Set();for(let i=0;i<pixels.data.length;i+=4)unique.add(pixels.data[i]);assert.ok(unique.size>1,'not post-click black frame');
+   const expected=crop(before,{x:b.x+110-6,y:b.y+110-6,width:12,height:12});assert.deepEqual(pixels.data,PNG.sync.read(expected.buffer).data,'viewport and iframe coordinate alignment');
   }
   fs.writeFileSync('test-results/capture-report.txt','PASS: transparent canvas over visible CSS image; cross-origin tainted canvas; nested frame coordinates; captured image predates immediate click replacement; low-texture capture retained with accurate warning; static WebGL without animation callbacks.\n');console.log('PASS compositor capture');
  }finally{await rec?.stop();await new Promise(r=>server.close(r));}

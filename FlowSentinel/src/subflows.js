@@ -144,7 +144,7 @@ class SubflowScheduler {
         if(!due&&(!this.imageReports.has(sub.id)||now-this.imageReports.get(sub.id)>=5000)){
           this.imageReports.set(sub.id,now);
           const comparison=triggerComparison(shot,Buffer.from(t.image,'base64'),t.rect);
-          log('info','子流程「'+sub.name+'」等待触发：截图条件未满足（不代表执行失败） · 匹配 '+(result.score*100).toFixed(1)+'% / 要求 '+Math.round(cfg.threshold*100)+'% · 模板 '+t.rect.width+'×'+t.rect.height+' · 原位容差 ±'+cfg.radius+'px · 已扫描当前页面视口'+(result.ambiguous?' · 多个匹配目标，暂不触发':'')+(Math.min(t.rect.width,t.rect.height)<24?' · 选区较窄，建议框选完整稳定图标':'')+(comparison?' · 对照图左：录制模板；右：当前原位区域':''),comparison?'data:image/png;base64,'+comparison.toString('base64'):undefined);
+          log('info','子流程「'+sub.name+'」等待触发：截图条件未满足（不代表执行失败） · 匹配 '+(result.score*100).toFixed(1)+'% / 要求 '+Math.round(cfg.threshold*100)+'% · 模板 '+t.rect.width+'×'+t.rect.height+' · 原位置未通过，已扫描当前页面视口'+(result.ambiguous?' · 多个匹配目标，暂不触发':'')+(Math.min(t.rect.width,t.rect.height)<24?' · 选区较窄，建议框选完整稳定图标':'')+(comparison?' · 对照图左：录制模板；右：当前原位区域':''),comparison?'data:image/png;base64,'+comparison.toString('base64'):undefined);
         }
       }
       if(due){
