@@ -29,6 +29,10 @@ const {fixture}=require('./subflows-e2e');
   await page.locator('#cronExpression').fill('* * * * * *');await page.locator('#subCron').click();await page.locator('#subRecording').waitFor({state:'visible'});
   await page.locator('#finishSubflow').click();await page.locator('#subReview').waitFor({state:'visible'});await page.locator('#saveSubflow').click();await page.waitForFunction(()=>document.querySelector('#notice').textContent.includes('至少'));
   await page.locator('#resumeSubflow').click();
+  await page.locator('#subCheckpoint').click();await page.locator('#captureDialog').waitFor({state:'visible'});
+  assert.equal(await page.locator('#captureTimeout').isVisible(),false);
+  assert.match(await page.locator('#checkpointHint').textContent(),/持续轮询/);
+  await page.locator('#cancelCapture').click();
   await app.evaluate(async()=>{await globalThis.testRecorder.pages.get(0).locator('#value').fill('private-sub-value');await globalThis.testRecorder.pages.get(0).locator('#add').click();});
   await page.locator('#finishSubflow').click();await page.locator('#subReview').waitFor({state:'visible'});await page.locator('#subName').fill('定时子流程');await page.locator('#saveSubflow').click();await page.locator('#nextSubflow').waitFor({state:'visible'});
   let result=await page.evaluate(()=>window.flowAPI.call('list'));assert.equal(result.data[0].subflows.length,1);assert.ok(!JSON.stringify(result).includes('private-sub-value'));
@@ -55,6 +59,6 @@ const {fixture}=require('./subflows-e2e');
   assert.equal(await page.locator('#subflowList details').count(),1);
   await page.locator('#startSubflow').click();await page.locator('#subCondition').waitFor({state:'visible'});await page.locator('#stopSubflow').click();await page.waitForFunction(()=>document.querySelector('#status').textContent==='待机');
   assert.deepEqual(errors,[]);
-  fs.writeFileSync('test-results/subflows-ui'+(packaged?'-packaged':'')+'-report.txt','PASS: real Electron/Chrome, mutually exclusive recording, cron editor/validation, action requirement, screenshot/cancel, save/preview/delete, multiple drafts, manual close, persistence and transfer.\n');console.log('PASS subflows UI',packaged?'packaged':'source');
+  fs.writeFileSync('test-results/subflows-ui'+(packaged?'-packaged':'')+'-report.txt','PASS: subflow checkpoint timeout hidden with indefinite polling hint; real Electron/Chrome, mutually exclusive recording, cron editor/validation, action requirement, screenshot/cancel, save/preview/delete, multiple drafts, manual close, persistence and transfer.\n');console.log('PASS subflows UI',packaged?'packaged':'source');
  }finally{await app?.close();await site.close();}
 })().catch(e=>{console.error(e);process.exitCode=1;});

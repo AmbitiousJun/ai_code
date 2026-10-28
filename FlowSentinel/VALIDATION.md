@@ -320,3 +320,30 @@ node test/portable-smoke.js
 Evidence → Finding → Path：test-results/visual-report.txt、strict-clicks-report.txt、repeat-report.txt 的实际点击坐标／次数断言 → 三类流程共用原位优先、唯一重定位、原坐标回退 → src/engine.js 的 visualClick/replayStep；录制继续由 recorder-script.js/capture.js 提供最小标记。未改写本机用户流程。
 
 - node test/portable-smoke.js：通过。1.4.7 单文件 EXE 解压启动、UI/preload、真实 Chrome 录制／停止及加密持久化通过。产物大小 102877862 字节，SHA-256：2D49421A3D8AD1DD4882524DE63BF88DEC33056EF76B7717E6CB80A0A4DBC7AC。
+
+## 1.4.8 子流程检查点无限等待验收（2026-10-28）
+
+- npm test：39/39 通过；首次沙箱内临时文件重命名失败，放开测试环境后通过。
+- node test/subflows-e2e.js：通过。旧 1000ms 检查点在等待 1700ms 后仍未点击，恢复匹配后点击；持续不匹配时取消无后续点击；主流程仍抛 CHECKPOINT_TIMEOUT。兼测双实例、200ms 调度、录制恢复和重试。首次沙箱内本机 HTTP 被拒绝，重跑通过。
+- node test/subflows-ui.js 与 --packaged：均通过。子流程检查点超时输入不可见，提示持续轮询，原有录入、保存和导入导出通过。
+- node test/checkpoint-e2e.js：通过。主流程检查点等待、超时阻断及停止保持原行为。
+- node test/unified-vision-e2e.js：通过。原测试切换歧义画面可能碰到正在运行的子流程检查点而无限等待；现先停止调度新子流程并等待下一次巡检，再验证歧义巡检失败，避免把检查点等待误当巡检失败。
+- npm run dist 与 node test/portable-smoke.js：通过。1.4.8 便携 EXE 解压启动、UI/preload、Chrome 录制/停止和加密保存通过。
+
+Evidence → Finding → Path：上述测试的超期无点击、匹配后继续与取消断言 → 仅子流程检查点取消等待期限 → src/subflows.js/executeSteps、src/engine.js/waitForCheckpoint；界面入口 src/main.js 与 src/ui/app.js。数据结构不变，保留旧 timeout 字段但子流程运行忽略；导出最低版本由 flow-transfer.js 标记为 1.4.8。
+
+产物：dist/FlowSentinel-1.4.8-win-x64.exe；SHA-256：88CDF036C782E8986F60BF897B27EA60C19847BE61F836A5FAE2F3E92A198999。
+
+## 1.4.9 子流程检查点非阻塞轮询（2026-10-28）
+
+- npm test：39/39 通过。
+- node test/subflows-e2e.js：通过。两个实例中首个子流程长时间截图未匹配时，后续截图子流程仍反复执行、最终巡检累计至少六次；前置动作每实例仅执行一次；恢复一个实例的图像后仅该实例继续。停止及时取消；挂起弹出页在完成/reset 后关闭。
+- node test/subflows-ui.js 及 --packaged：源码版、解包版界面通过，提示非阻塞且隐藏超时输入；录制、保存、导入导出回归通过。
+- node test/checkpoint-e2e.js、node test/unified-vision-e2e.js：通过。主流程超时及截图匹配、巡检行为保留。
+- app.asar 内 subflows.js、engine.js、flow-transfer.js、ui/app.js、ui/index.html 与当前源码逐字节一致，版本为 1.4.9。
+
+Evidence → Finding → Path：真实双实例的巡检日志、后续截图触发完成次数、前置点击次数及单实例恢复断言 → 未匹配检查点保存进度并让出执行，不阻塞调度 → src/subflows.js/executeSteps 与 SubflowScheduler.executions；src/engine.js/Runner 的 finally 清空挂起进度。无需迁移本机流程；含子流程检查点的导出要求最低 1.4.9。
+
+新增双实例测试首次因录制期间取得的健康参考图不稳定而在进入巡检前超时；改为从干净夹具浏览器采集后通过。
+
+- npm run dist、node test/portable-smoke.js：通过。1.4.9 便携 EXE 解压启动、界面/IPC、Chrome 录制、停止及加密保存通过。产物 dist/FlowSentinel-1.4.9-win-x64.exe，102880911 字节，SHA-256：8D90B5B7155A15869BAC3C4E7522DDAB8E275FD3B41CF88037811B0114B3C928。

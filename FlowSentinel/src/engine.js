@@ -175,7 +175,7 @@ class Recorder extends EventEmitter {
     if(!Number.isFinite(timeout)||timeout<1000||timeout>600000||!Number.isFinite(threshold)||threshold<0.5||threshold>1)throw new Error('检查点超时或匹配率超出范围');
     const step={type:'checkpoint',page:this.snapshotPage,frame:[],delay:0,timeout,threshold,trusted:{rect:result.rect,image:result.buffer.toString('base64'),page:this.snapshotPage}};
     this.flow.steps.splice(this.snapshotIndex,0,step);this.emit('change',this.flow);
-    this.emit('log','info','已插入 #'+(this.snapshotIndex+1)+' 继续执行检查点，最长等待 '+timeout/1000+' 秒');
+    this.emit('log','info','已插入 #'+(this.snapshotIndex+1)+' 继续执行检查点，'+(options.unlimited?'持续轮询直到匹配成功':'最长等待 '+timeout/1000+' 秒'));
     return step;
   }
   async stop() {
@@ -431,6 +431,7 @@ class Runner extends EventEmitter {
           attempts++;this.state(id,'准备恢复',{recoveries:attempts});
           this.log(id,'warn','第 '+attempts+' 次恢复：关闭旧标签页并从头回放，保留实例缓存；浏览器不可用时重新启动');
         } finally {
+          await scheduler.reset();
           await repeats?.clear();
           if(context&&onPage)context.off('page',onPage);
           onPage=null;

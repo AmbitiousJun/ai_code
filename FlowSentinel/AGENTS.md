@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-28。对应版本：`package.json` 中的 **1.4.7**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-28。对应版本：`package.json` 中的 **1.4.9**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -109,7 +109,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.4.7-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.4.9-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -219,7 +219,7 @@ flowchart TD
 
 | 字段 | 含义 |
 | --- | --- |
-| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.4.7 |
+| `version` | 流程数据结构版本，当前创建值为 1；不同于应用版本 1.4.9 |
 | `id`、`name` | UUID 与用户流程名称 |
 | `viewport` | 录制、重放共用的宽高 |
 | `config` | 实例数、阈值、等待、恢复和 Chrome 参数 |
@@ -587,3 +587,17 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - 标记缺失、损坏、低特征或旧 visualError 同样回退，日志记录原因及坐标；没有有效原坐标的旧 iframe 步骤需重录。截图异常、停止、页面关闭及实际操作异常继续中止，不被匹配回退吞掉。检查点、巡检、子流程触发条件不产生回退点击。
 - 每次短点击独立截图和定位；不复用上次点击坐标；拖动保留录制轨迹。无新增生产模块、依赖、IPC 或数据字段。UI 提示、交换最低导入版本更新为对应的 1.4.7 行为。第 31 节严格失败行为为历史记录，由本节取代。
 - 分发文件：dist/FlowSentinel-1.4.7-win-x64.exe；验证命令及结果见 VALIDATION.md。
+
+## 33. 1.4.8 子流程检查点无限等待
+
+- Evidence → Finding → Path：test/subflows-e2e.js 验证超过旧 timeout 后无点击、匹配后继续、取消后无点击及主流程仍超时；test/subflows-ui.js 验证子流程框选隐藏超时 → 仅 SubflowScheduler 调用 executeSteps 时开启 unlimitedCheckpoints → engine.js/waitForCheckpoint 使用无限截止时间，保留每轮最多 500ms 可取消等待及单次截图超时。截图触发原有 200ms 调度不变，未匹配不执行子流程。
+- main.js 的子流程 checkpoint 分派忽略传入 timeout，使用兼容占位值保存原结构，日志显示持续轮询；ui/app.js 隐藏子流程超时输入并更新提示。旧子流程步骤的 timeout 保留存储兼容但运行时忽略，无需迁移。主流程及录入前主流程恢复仍有超时。
+- 1.4.8 曾在子流程检查点等待时暂停同实例其他子流程和最终巡检；此行为已由第 34 节取代。停止、页面关闭和截图异常仍正常中断；仅匹配失败不进入恢复。
+- flow-transfer.js 对含子流程检查点的导出声明最低导入版本 1.4.8，防止旧版本按超时恢复。无新增模块、依赖、IPC 或数据字段，源码目录树不变；既有测试文件扩展验证。发布产物 dist/FlowSentinel-1.4.8-win-x64.exe。
+
+## 34. 1.4.9 子流程检查点让出执行
+
+- Evidence → Finding → Path：test/subflows-e2e.js 验证双实例内首个子流程检查点持续缺失时，后续截图子流程仍执行且最终巡检累计多轮；一个实例匹配后恢复，另一个仍等待，前置动作不重复 → SubflowScheduler 为每个子流程保存 executions（步骤索引、随机字段值、局部页面表与新建标签页），executeSteps 对检查点仅截图匹配一次，未匹配返回 false 并继续遍历其余子流程 → 维护 src/subflows.js。
+- 后续轮询从挂起的检查点继续，不重做前置动作、不重复生成随机字段值、不重新等待录制延迟；不再受旧 timeout 限制。截图触发条件未满足时仍跳过，多个满足条件的子流程按保存顺序串行运行，不并发操作页面。200ms 调度休息及最终巡检独立截止时间保留；截图计算与实际动作耗时仍影响实际周期。
+- 挂起子流程独立保留其弹出页；页面监听仅在该子流程正在执行时绑定，其他子流程不继承这些页。完成时关闭所属弹出页。Runner 每轮 finally 调用 scheduler.reset 清理挂起进度及页面，停止/恢复不复用旧进度；cron 时间槽及失败 pending 重试规则保留。
+- 主流程检查点和子流程录入前恢复仍调用有超时的 waitForCheckpoint。UI 说明改为不阻塞其他子流程和最终巡检。含子流程检查点的导出最低版本升为 1.4.9。无新增模块、依赖、IPC 或持久化字段，目录树不变，版本产物 dist/FlowSentinel-1.4.9-win-x64.exe。

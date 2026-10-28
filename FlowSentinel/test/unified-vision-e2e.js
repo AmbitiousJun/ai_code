@@ -31,6 +31,11 @@ async function until(fn){const end=Date.now()+20000;while(Date.now()<end){if(fn(
     assert.ok(logs.some(m=>m.includes('全视口定位 (500, 200)')));
     await page.evaluate(()=>paint('original'));
     await until(()=>logs.some(m=>m.includes('原位置')&&m.includes('正常')));
+    // Stop scheduling subflows and wait for an inspection after any in-flight
+    // checkpoint completes, so ambiguity tests final inspection, not an infinite gate.
+    flow.subflows.splice(0);
+    const before=logs.filter(m=>m.includes('正常')).length;
+    await until(()=>logs.filter(m=>m.includes('正常')).length>before);
     await page.evaluate(()=>paint('duplicate'));
     await running;
     assert.equal(runner.states[0].status,'需要人工处理');

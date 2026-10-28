@@ -3,24 +3,33 @@ const {randomUUID}=require('crypto');
 const {Recorder,config,stepConfig,sleep,replayStep,waitForCheckpoint,label}=require('./engine');
 const {RepeatClicks}=require('./repeat-clicks');
 const {generateValues,fieldId}=require('./variables');
-const {matchTrigger,crop,triggerComparison}=require('./vision');
+const {matchTrigger,matchScreenshot,crop,triggerComparison}=require('./vision');
 const {parseCron,cronMatches,cronSlot}=require('./cron');
 
-async function executeSteps(flow,pages,cfg,signal,log=()=>{},instance=1) {
-  const repeats=new RepeatClicks(),values=generateValues(flow,instance);
-  try{for(let i=0;i<flow.steps.length;i++){
+async function executeSteps(flow,pages,cfg,signal,log=()=>{},instance=1,execution=null) {
+  const repeats=new RepeatClicks(),values=execution?.values??generateValues(flow,instance);
+  try{for(let i=execution?.index??0;i<flow.steps.length;i++){
     const actionCfg=stepConfig(flow,i,cfg);
     let step=flow.steps[i];
     if(step.type==='fill'&&values.has(fieldId(step)))step={...step,value:values.get(fieldId(step))};
-    await sleep(actionCfg.ignoreRecordedDelays?actionCfg.actionInterval:Math.min(step.delay||0,actionCfg.maxStepDelay),signal);
+    if(execution?.waiting!==i)await sleep(actionCfg.ignoreRecordedDelays?actionCfg.actionInterval:Math.min(step.delay||0,actionCfg.maxStepDelay),signal);
     const deadline=Date.now()+actionCfg.stepTimeout;
     while(!pages.has(step.page||0)&&Date.now()<deadline)await sleep(100,signal);
     const page=pages.get(step.page||0);if(!page||page.isClosed())throw new Error('子流程目标标签页未出现或已关闭');
     page.setDefaultTimeout(actionCfg.stepTimeout);page.setDefaultNavigationTimeout(actionCfg.stepTimeout);
-    log('info','#'+(i+1)+' '+label(step));
-    if(step.type==='checkpoint'){await repeats.clear();await waitForCheckpoint(page,step,actionCfg,signal);}
+    if(execution?.waiting!==i)log('info','#'+(i+1)+' '+label(step));
+    if(step.type==='checkpoint'){
+      await repeats.clear();
+      if(execution){
+        const shot=await page.screenshot({timeout:actionCfg.stepTimeout,caret:'hide'});
+        const found=await matchScreenshot(shot,Buffer.from(step.trusted.image,'base64'),step.trusted.rect,step.threshold??actionCfg.threshold,signal);
+        await sleep(0,signal);
+        if(found.ambiguous||found.score<(step.threshold??actionCfg.threshold)){execution.waiting=i;return false;}
+      }else await waitForCheckpoint(page,step,actionCfg,signal);
+    }
     else await replayStep(page,step,signal,(m,l='info')=>log(l,m),repeats);
-  }}finally{for(const page of pages.values()){page.setDefaultTimeout(cfg.stepTimeout);page.setDefaultNavigationTimeout(cfg.stepTimeout);}await repeats.clear();}
+    if(execution){execution.index=i+1;execution.waiting=undefined;}
+  }return true;}finally{for(const page of pages.values()){page.setDefaultTimeout(cfg.stepTimeout);page.setDefaultNavigationTimeout(cfg.stepTimeout);}await repeats.clear();}
 }
 
 class SubflowSession extends EventEmitter {
@@ -125,11 +134,19 @@ class SubflowSession extends EventEmitter {
 
 // One scheduler per instance; time-slot receipts survive main-flow recovery.
 class SubflowScheduler {
-  constructor(subflows=[]){this.subflows=subflows;this.slots=new Map();this.pending=new Set();this.imageReports=new Map();}
+  constructor(subflows=[]){this.subflows=subflows;this.slots=new Map();this.pending=new Set();this.imageReports=new Map();this.executions=new Map();}
+  async release(id,pages){
+    const execution=this.executions.get(id);if(!execution)return;
+    this.executions.delete(id);
+    await Promise.allSettled(execution.created.map(p=>p.close()));
+    if(pages)for(const [key,p] of pages)if(execution.created.includes(p))pages.delete(key);
+  }
+  async reset(pages){for(const id of [...this.executions.keys()])await this.release(id,pages);}
   async tick(pages,cfg,signal,log,instance=1){
     for(const sub of this.subflows){
       await sleep(0,signal);let due=false;
-      if(sub.trigger.type==='cron'){
+      if(this.executions.has(sub.id))due=true;
+      else if(sub.trigger.type==='cron'){
         const now=new Date(),slot=cronSlot(sub.trigger.expression,now);
         due=this.pending.has(sub.id)||(this.slots.get(sub.id)!==slot&&cronMatches(sub.trigger.expression,now));
         if(due){this.slots.set(sub.id,slot);this.pending.add(sub.id);}
@@ -148,18 +165,23 @@ class SubflowScheduler {
         }
       }
       if(due){
-        log('info','触发子流程：'+sub.name);
-        const local=new Map([...pages].filter(([id])=>sub.pageBase===undefined||id<sub.pageBase));
-        const context=[...local.values()][0]?.context(),created=[];
-        let next=sub.pageBase??Math.max(...local.keys())+1;
-        const onPage=p=>{local.set(next++,p);created.push(p);};
-        context?.on('page',onPage);
-        try{await executeSteps(sub,local,cfg,signal,(l,m)=>log(l,'子流程「'+sub.name+'」 · '+m),instance);}
-        catch(e){log('error','子流程「'+sub.name+'」执行失败，进入主流程恢复策略');throw e;}
-        finally{
-          context?.off('page',onPage);await Promise.allSettled(created.map(p=>p.close()));
-          for(const [id,p] of pages)if(created.includes(p))pages.delete(id);
+        let execution=this.executions.get(sub.id);
+        if(!execution){
+          log('info','触发子流程：'+sub.name);
+          const owned=new Set([...this.executions.values()].flatMap(e=>e.created));
+          const local=new Map([...pages].filter(([id,p])=>(sub.pageBase===undefined||id<sub.pageBase)&&!owned.has(p)));
+          execution={index:0,values:generateValues(sub,instance),pages:local,created:[],next:sub.pageBase??Math.max(...local.keys())+1};
+          this.executions.set(sub.id,execution);
         }
+        const local=execution.pages,context=[...local.values()][0]?.context();
+        const onPage=p=>{local.set(execution.next++,p);execution.created.push(p);};
+        context?.on('page',onPage);
+        let complete=false;
+        try{complete=await executeSteps(sub,local,cfg,signal,(l,m)=>log(l,'子流程「'+sub.name+'」 · '+m),instance,execution);}
+        catch(e){await this.reset(pages);log('error','子流程「'+sub.name+'」执行失败，进入主流程恢复策略');throw e;}
+        finally{context?.off('page',onPage);}
+        if(!complete)continue;
+        await this.release(sub.id,pages);
         this.pending.delete(sub.id);
         log('info','子流程完成：'+sub.name);
       }

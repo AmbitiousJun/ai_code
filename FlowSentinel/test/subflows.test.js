@@ -63,3 +63,8 @@ test('continued drafts normalize new popup pages without changing recorded data'
   const before=structuredClone(session.recorder.flow.steps),sub=session.save('new popup');
   assert.deepEqual(sub.steps.map(s=>s.page),[0,1,1]);assert.deepEqual(session.recorder.flow.steps,before);
 });
+
+test('subflow checkpoints declare unlimited-wait importer semantics',()=>{
+ const f=base();f.subflows[0].steps.unshift({type:'checkpoint',timeout:1000,threshold:.9,trusted:{rect:{x:0,y:0,width:12,height:12},image:'legacy',page:0}});
+ validateFlow(f);const text=transfer.encode(f,'1.4.9');assert.equal(JSON.parse(text).minImporterVersion,'1.4.9');assert.throws(()=>transfer.decode(text,'1.4.7'),/1.4.9/);assert.deepEqual(transfer.decode(text,'1.4.9'),f);
+});

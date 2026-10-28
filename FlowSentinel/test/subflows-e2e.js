@@ -3,21 +3,54 @@ const {chromium}=require('playwright-core');
 const {SubflowSession,SubflowScheduler}=require('../src/subflows');
 const {Runner,config,sleep}=require('../src/engine');
 const {crop}=require('../src/vision');
-const html=`<html><body><div id="ready" style="width:120px;height:60px;background:#27a488">READY</div><input id="value"><button id="add" onclick="window.count=(window.count||0)+1">Add</button><button id="popup" onclick="window.open('/popup')">Popup</button></body></html>`;
+const html=`<html><body><div id="ready" style="width:120px;height:60px;background:#27a488">READY</div><div id="health" style="width:100px;height:30px;background:#ff66bb">HEALTH</div><button id="before" onclick="window.beforeCount=(window.beforeCount||0)+1">Before</button><input id="value"><button id="add" onclick="window.count=(window.count||0)+1">Add</button><button id="popup" onclick="window.open('/popup')">Popup</button><script>if(location.search.includes("blocked"))document.querySelector("#ready").style.visibility="hidden";</script></body></html>`;
 async function until(fn,ms=20000){const end=Date.now()+ms;while(Date.now()<end){if(await fn())return;await sleep(50);}throw Error('Timed out');}
 async function fixture(){
   const server=http.createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(html);});await new Promise(r=>server.listen(0,'127.0.0.1',r));
   const url='http://127.0.0.1:'+server.address().port;
-  const b=await chromium.launch({channel:'chrome',headless:true});let trusted;
-  try{const p=await b.newPage({viewport:{width:1280,height:720}});await p.goto(url);const result=crop(await p.screenshot(),{x:8,y:8,width:120,height:60});trusted={rect:result.rect,image:result.buffer.toString('base64'),page:0};}finally{await b.close();}
+  const b=await chromium.launch({channel:'chrome',headless:true});let trusted,health;
+  try{const p=await b.newPage({viewport:{width:1280,height:720}});await p.goto(url);const result=crop(await p.screenshot(),{x:8,y:8,width:120,height:60});trusted={rect:result.rect,image:result.buffer.toString('base64'),page:0};const h=crop(await p.screenshot(),await p.locator('#health').boundingBox());health={rect:h.rect,image:h.buffer.toString('base64'),page:0};}finally{await b.close();}
   const flow={version:1,id:'11111111-1111-4111-8111-111111111111',name:'子流程验收',viewport:{width:1280,height:720},config:config({grace:0,interval:1,actionInterval:20,retries:1,checkpointTimeout:5000,stepTimeout:5000}),steps:[{type:'goto',url,page:0}],trusted};
-  return {flow,close:()=>new Promise(r=>server.close(r))};
+  return {flow,health,close:()=>new Promise(r=>server.close(r))};
 }
 async function main(){
  const site=await fixture();let session,run;
  try{
   session=new SubflowSession(site.flow);await session.start();assert.equal(session.phase,'condition');assert.equal(session.recorder.flow.steps.length,0);
   const browser=session.recorder.browser,p=session.recorder.pages.get(0);
+  // Legacy timeout is ignored only inside subflow checkpoints.
+  const gate={type:'checkpoint',trusted:site.flow.trusted,timeout:1000,threshold:.9};
+  const gated={id:'gate',name:'无限等待验收',trigger:{type:'cron',expression:'* * * * * *'},steps:[gate,{type:'click',selector:'#add'}]};
+  await p.locator('#ready').evaluate(el=>el.style.visibility='hidden');
+  const controller=new AbortController(),gateLogs=[],pages=new Map([[0,p]]);
+  const scheduler=new SubflowScheduler([gated,{id:'other',name:'其他截图子流程',trigger:{type:'cron',expression:'* * * * *'},steps:[{type:'fill',selector:'#value',value:'other ran'}]}]);
+  await scheduler.tick(pages,site.flow.config,controller.signal,(l,m)=>gateLogs.push(m));
+  assert.equal(await p.locator('#value').inputValue(),'other ran');
+  await sleep(1700);await scheduler.tick(pages,site.flow.config,controller.signal,()=>{});
+  assert.equal(await p.evaluate(()=>window.count||0),0);assert.ok(!gateLogs.some(m=>m.includes('失败')));
+  await p.locator('#ready').evaluate(el=>el.style.visibility='visible');
+  await scheduler.tick(pages,site.flow.config,controller.signal,()=>{});assert.equal(await p.evaluate(()=>window.count),1);
+  await p.locator('#ready').evaluate(el=>el.style.visibility='hidden');
+  const cancel=new AbortController(),cancelScheduler=new SubflowScheduler([gated]);
+  await cancelScheduler.tick(pages,site.flow.config,cancel.signal,()=>{});cancel.abort();
+  await assert.rejects(cancelScheduler.tick(pages,site.flow.config,cancel.signal,()=>{}));
+  await cancelScheduler.reset(pages);assert.equal(cancelScheduler.executions.size,0);assert.equal(await p.evaluate(()=>window.count),1);
+  await assert.rejects(()=>require('../src/engine').waitForCheckpoint(p,gate,site.flow.config,new AbortController().signal),{code:'CHECKPOINT_TIMEOUT'});
+  await p.locator('#ready').evaluate(el=>el.style.visibility='visible');
+  // Retain popup ownership across a suspended checkpoint, then close on completion/reset.
+  const popupSub={id:'popup-wait',name:'弹出页等待',pageBase:1,trigger:{type:'cron',expression:'* * * * *'},steps:[{type:'click',selector:'#popup'},gate,{type:'click',selector:'#add',page:1}]};
+  const popupScheduler=new SubflowScheduler([popupSub]);
+  await p.locator('#ready').evaluate(el=>el.style.visibility='hidden');
+  await popupScheduler.tick(pages,site.flow.config,new AbortController().signal,()=>{});
+  const held=popupScheduler.executions.get(popupSub.id);assert.equal(held.index,1);assert.equal(held.created.length,1);assert.equal(held.created[0].isClosed(),false);
+  await p.locator('#ready').evaluate(el=>el.style.visibility='visible');
+  await popupScheduler.tick(pages,site.flow.config,new AbortController().signal,()=>{});
+  assert.equal(held.created[0].isClosed(),true);assert.equal(popupScheduler.executions.size,0);
+  const resetScheduler=new SubflowScheduler([popupSub]);await p.locator('#ready').evaluate(el=>el.style.visibility='hidden');
+  await resetScheduler.tick(pages,site.flow.config,new AbortController().signal,()=>{});
+  const resetPopup=resetScheduler.executions.get(popupSub.id).created[0];await resetScheduler.reset(pages);
+  assert.equal(resetPopup.isClosed(),true);assert.equal(resetScheduler.executions.size,0);
+  await p.locator('#ready').evaluate(el=>el.style.visibility='visible');
   await p.locator('#value').fill('not-recorded');await sleep(200);assert.equal(session.recorder.flow.steps.length,0);
   await assert.rejects(()=>session.setTrigger({type:'cron',expression:'invalid'}));
   await session.setTrigger({type:'cron',expression:'* * * * *'});await session.finish();assert.throws(()=>session.save('empty'),/至少/);
@@ -43,7 +76,21 @@ async function main(){
   const nextPopupPromise=root.waitForEvent('popup');await root.locator('#popup').click();const nextPopup=await nextPopupPromise;
   await nextPopup.waitForLoadState();await nextPopup.goto(site.flow.steps[0].url+'/popup-again');await nextPopup.locator('#add').click();await session.finish();session.save('再次弹出页动作');
   assert.equal(session.flow.subflows[3].steps.at(-1).page,session.pageBase);
+  const healthCrop=crop(await p.screenshot(),{x:8,y:68,width:100,height:30});
+  const health={page:0,rect:healthCrop.rect,image:healthCrop.buffer.toString('base64')};
   const flow=structuredClone(session.flow);assert.equal(flow.subflows.length,4);await session.stop();
+  const nonblocking=structuredClone(site.flow);nonblocking.trusted=site.health;nonblocking.steps[0].url+='?blocked';
+  nonblocking.subflows=[{...gated,steps:[{type:'click',selector:'#before'},gate,{type:'click',selector:'#add'}]},
+    {id:'healthy',name:'后续图片触发',trigger:{type:'image',trusted:site.health},steps:[{type:'fill',selector:'#value',value:'still running'}]}];
+  run=new Runner(nonblocking,config({...site.flow.config,count:2,interval:1,retries:0}));const fairLogs=[];run.on('log',(l,m)=>fairLogs.push(m));run.start();
+  try{await until(()=>fairLogs.filter(m=>m.includes('可信图像匹配')).length>=6);}catch(e){console.error(fairLogs.join('\n'));throw e;}
+  const fairPages=[...run.browsers].map(b=>b.contexts()[0].pages()[0]);assert.equal(fairPages.length,2);
+  for(const fp of fairPages){assert.equal(await fp.evaluate(()=>window.count||0),0);assert.equal(await fp.evaluate(()=>window.beforeCount),1);assert.equal(await fp.locator('#value').inputValue(),'still running');}
+  assert.ok(fairLogs.filter(m=>m.includes('子流程完成：后续图片触发')).length>=4);
+  await fairPages[0].locator('#ready').evaluate(el=>el.style.visibility='visible');
+  await until(async()=>await fairPages[0].evaluate(()=>window.count||0)>0);
+  assert.equal(await fairPages[1].evaluate(()=>window.count||0),0);assert.equal(await fairPages[1].evaluate(()=>window.beforeCount),1);
+  const stoppedAt=performance.now();await run.stop();assert.ok(performance.now()-stoppedAt<3000);
   run=new Runner(flow,config({...flow.config,count:2,interval:15}));const logs=[];run.on('log',(l,m)=>logs.push(m));run.start();
   await until(()=>logs.filter(x=>x.includes('子流程完成：截图点击')).length>=2);
   await until(()=>logs.filter(x=>x.includes('子流程完成：截图点击')).length>=6,5000);
@@ -80,7 +127,7 @@ async function main(){
   session=new SubflowSession(bad);const pending=assert.rejects(session.start());await until(()=>!!session.recorder?.context);await session.stop();await pending;
   // Closing Chrome ends the session.
   session=new SubflowSession(site.flow);await session.start();await session.recorder.browser.close();await until(()=>session.phase==='closed');
-  fs.writeFileSync('test-results/subflows-e2e-report.txt','PASS: restore and suppression; required trigger/action; named save; same Chrome/context/page retained; manual navigation and input excluded; saved draft unchanged; image and cron; two isolated instances; independent 200ms polling with 15s inspections; inspection cadence; no busy polling; minute deduplication; retry exhaustion; stop; browser close; redacted logs.\n');
+  fs.writeFileSync('test-results/subflows-e2e-report.txt','PASS: blocked checkpoint yields to later subflow and final inspection in two instances; prefix runs once and independent resume; unlimited subflow checkpoint exceeds legacy timeout without click; match resumes; cancellation blocks click; main checkpoint still times out; restore and suppression; required trigger/action; named save; same Chrome/context/page retained; manual navigation and input excluded; saved draft unchanged; image and cron; two isolated instances; independent 200ms polling with 15s inspections; inspection cadence; no busy polling; minute deduplication; retry exhaustion; stop; browser close; redacted logs.\n');
   console.log('PASS subflows e2e');
  }finally{await run?.stop();await session?.stop();await site.close();}
 }

@@ -134,7 +134,7 @@ async function command(action,data={}){
       recorder.setTrusted(data);await recorder.resumeCapture();return summary(recorder.flow);
     }
     case 'checkpoint':{
-      if(subSession){if(subSession.phase!=='recording')throw new Error('请先录制动作');subSession.recorder.setCheckpoint(data.rect,data);await subSession.recorder.resumeCapture();return;}
+      if(subSession){if(subSession.phase!=='recording')throw new Error('请先录制动作');subSession.recorder.setCheckpoint(data.rect,{threshold:data.threshold,unlimited:true});await subSession.recorder.resumeCapture();return;}
       if(!recorder)throw new Error('请先开始录制');
       if(recordStarting||recorder.flow.kind==='base')throw new Error('基础流程或准备阶段不能录制可信截图');
       recorder.setCheckpoint(data.rect,{timeout:data.timeout,threshold:data.threshold});await recorder.resumeCapture();return summary(recorder.flow);

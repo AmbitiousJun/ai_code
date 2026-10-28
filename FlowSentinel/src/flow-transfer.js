@@ -14,7 +14,7 @@ function older(a,b){const x=version(a),y=version(b);for(let i=0;i<3;i++){if(x[i]
 function encode(flow,appVersion){
   version(appVersion);
   if(flow.kind==='base')throw new Error('只能导出全流程');
-  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:[...flow.steps,...(flow.subflows||[]).flatMap(s=>s.steps)].some(s=>s.type==='canvas'||(['click','check'].includes(s.type)&&s.frame?.length))?'1.4.7':flow.baseFlow?'1.4.0':flow.subflows?.some(s=>s.trigger?.type==='cron'&&s.trigger.expression.trim().split(/\s+/).length===6)?'1.3.2':flow.subflows?.length?'1.3.0':MIN_VERSION,exporterVersion:appVersion,flow});
+  const text=JSON.stringify({format:FORMAT,protocolVersion:PROTOCOL,minImporterVersion:flow.subflows?.some(s=>s.steps.some(step=>step.type==='checkpoint'))?'1.4.9':[...flow.steps,...(flow.subflows||[]).flatMap(s=>s.steps)].some(s=>s.type==='canvas'||(['click','check'].includes(s.type)&&s.frame?.length))?'1.4.7':flow.baseFlow?'1.4.0':flow.subflows?.some(s=>s.trigger?.type==='cron'&&s.trigger.expression.trim().split(/\s+/).length===6)?'1.3.2':flow.subflows?.length?'1.3.0':MIN_VERSION,exporterVersion:appVersion,flow});
   if(Buffer.byteLength(text)>MAX_BYTES)throw new Error('流程文件超过 128 MiB 限制');
   return text;
 }
