@@ -377,7 +377,7 @@ class Runner extends EventEmitter {
             // Separate deadlines keep subflow polling fast without increasing inspection work.
             // Await each tick, then rest: slow actions never overlap or queue catch-up ticks.
             if(hasSubflows&&performance.now()>=nextSubflowCheck) {
-              await scheduler.tick(pages,cfg,signal,(l,m)=>this.log(id,l,m),id);
+              await scheduler.tick(pages,cfg,signal,(l,m,image)=>this.log(id,l,m,image),id);
               nextSubflowCheck=performance.now()+SUBFLOW_POLL_INTERVAL;
             }
             const nextWake=hasSubflows?Math.min(nextInspection,nextSubflowCheck):nextInspection;

@@ -1,6 +1,6 @@
 # FlowSentinel 技术架构与源码导航
 
-核对日期：2026-10-26。对应版本：`package.json` 中的 **1.4.2**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
+核对日期：2026-10-27。对应版本：`package.json` 中的 **1.4.4**。本文依据 `D:\ai_code\FlowSentinel` 当前源码整理；正式导航文件为 `AGENTS.md`；
 
 FlowSentinel 是 Windows x64 浏览器操作录制与巡检桌面程序。用户在程序启动的 Chrome 中录制流程，程序保存表单值、操作步骤和可信截图，再以多个独立浏览器实例回放，通过截图检查点等待业务画面就绪，并在巡检异常时优先重建标签页，保留实例缓存。
 
@@ -83,6 +83,8 @@ D:\ai_code\FlowSentinel\
 ├── test/
 │   ├── base-flows.test.js       基础流程限制、嵌入前缀不可变及交换版本测试
 │   ├── base-flows-ui.js         真实 Chrome 基础模板回放、分类、导入导出与打包验收
+│   ├── small-trigger.test.js    小图、全视口触发、歧义、取消及诊断回归
+│   ├── trigger-diagnostics-ui.js 子流程对照图日志及放大窗口验收
 │   ├── subflows.test.js         crontab 与子流程协议校验
 │   ├── subflows-e2e.js          真实 Chrome 恢复、触发、隔离、停止和重试验收
 │   ├── subflows-ui.js           源码版及解包版子流程 GUI 验收
@@ -105,7 +107,7 @@ D:\ai_code\FlowSentinel\
 │   ├── portable-smoke.js        单文件 EXE 解压启动和基础操作验收
 │   └── create-icon.js           生成 src/ui/icon.png 和 icon.ico 的开发脚本
 └── dist/
-    └── FlowSentinel-1.4.2-win-x64.exe  当前分发产物，不是源码
+    └── FlowSentinel-1.4.4-win-x64.exe  当前分发产物，不是源码
 ```
 
 执行安装、构建和测试后，还会产生 `node_modules/`、`test-results/`、`dist/win-unpacked/` 及打包中间文件。目录树中的 EXE 名称对应本次核对版本，后续随版本号变化。
@@ -121,7 +123,7 @@ D:\ai_code\FlowSentinel\
 | `engine.js` | `waitForCheckpoint()`、`sleep()` | 检查点轮询、超时和可取消等待 |
 | `recorder-script.js` | `installRecorder()` | 元素选择器、输入事件、Canvas 轨迹、滚动和悬停采集 |
 | `variables.js` | `fieldId()`、`fields()`、`validateRules()`、`expand()`、`generateValues()` | 字段归一化、模板语法、随机值生命周期 |
-| `vision.js` | `crop()`、`match()` | 区域合法性、颜色差异阈值、候选位置搜索与匹配评分 |
+| `vision.js` | `crop()`、`match()`、`matchTrigger()`、`triggerComparison()` | 裁剪、局部匹配、子流程全视口触发搜索及诊断对照图 |
 | `store.js` | `Store.create/save/get/list/delete` | 持久化格式、文件命名和加密读写 |
 | `ui/app.js` | `config()`、`setConfig()`、`renderDetail()`、`renderStates()`、`capture()` | UI 单位换算、状态更新、字段编辑和截图选择 |
 
@@ -535,3 +537,21 @@ vision.js/locateClick 保留完整 48×48 原位校验和画布搜索。只有�
 - main.js 在创建、保存基础流程时将白名单以外的配置归为默认值；独立录制基础流程使用默认 Chrome 参数。嵌入快照不随基础原件后续修改变化，旧快照中的七项设置也按当前继承规则生效。
 - 基础流程仍禁止检查点和独立巡检；保留匹配率、位置容差、检查点默认超时控件不改变 Canvas 点击匹配算法或全流程最终巡检配置。
 - 无新增模块、依赖、IPC 或数据字段，源码目录树不变。验证入口：npm test、test/base-flows-ui.js（支持 --packaged）、test/portable-smoke.js。分发产物为 dist/FlowSentinel-1.4.2-win-x64.exe。
+
+## 28. 1.4.3 小尺寸触发图搜索与诊断
+
+- 只读检查指定流程得到末尾子流程触发图为 12×27、位置 (896,547)、阈值 70%、搜索容差 12px。无该流程故障截图，未重放线上游戏，因此不能认定算法漏检是现场失败的唯一原因；窄选区、按钮状态变化和超出容差的位移仍需运行画面对照。
+- Evidence → Finding → Path：small-trigger.test.js 构造 12×27 模板、奇数像素位移和四个干扰候选；旧算法最高仅 62.96%，新算法 100% → 隔两像素扫描并仅细查前四候选可能漏掉小图真实匹配点 → vision.js/match 对最短边小于 36px 且面积不超过 4096px² 的图执行容差范围内逐像素搜索，优先原位；大图保持原有算法。小图严格限制在 radius 内，不再向外细化一像素。RGB 容差和通过阈值不变。
+- subflows.js/SubflowScheduler 每实例、每子流程最多每 5 秒输出一次未满足条件的匹配率、阈值、模板尺寸和容差；小于 24px 的窄边附重选建议。ui/app.js 在子流程详情显示实际图片尺寸和窄选区提示。日志限流使用单调时钟；停止、串行执行和实例隔离策略不变。
+- 无新增生产模块、依赖、IPC 或持久化字段；新增 test/small-trigger.test.js，目录树已同步。原有流程无需迁移；程序不能从已保存的窄图恢复缺失的外围画面，若需要更大模板须重新录入子流程。
+- 验证入口：npm test、node test/subflows-e2e.js、node test/subflows-ui.js（支持 --packaged）、node test/portable-smoke.js。具体执行结果见 VALIDATION.md。
+
+## 29. 1.4.4 子流程截图跨位置触发
+
+- 真实回放确认「自动化 Kaga Cluck Chaos」40×41 模板在右侧座位为 100%；换至左侧座位时录制区域只剩背景，局部匹配为 9.4%。按钮从 (878,537) 移至 (161,537)，超过原 ±12px 容差。另一种低分来自子流程成功执行后的红色按钮状态，两者不能混为一谈。
+- Evidence → Finding → Path：实际换座位截图、日志及 test/small-trigger.test.js → 子流程触发先于点击定位，原有局部触发匹配阻止了后续 Canvas 重定位 → 新增 vision.js/matchTrigger：原位容差匹配达标优先，否则扫描当前目标 Page 的整个截图视口，以相同 RGB 容差 32 和配置阈值确认；远离超过 8px 的多个候选判歧义，暂不触发。只调整 image 子流程触发，检查点及最终巡检仍使用 match。
+- 全视口搜索使用各通道中位数及 ±32 扩展后的积分计数作保守排除，再按允许不一致像素数逐像素确认；计数筛选不降低阈值、不增加允许误差。循环定期让出事件循环并检查停止信号。搜索时间计入轮询耗时，不保证 200ms 完成；只搜索当前实例当前触发页的可见视口，不识别座位语义、旋转或缩放。
+- subflows.js 调用 matchTrigger 并输出触发图重定位坐标；Canvas 动作继续独立使用 locateClick 定位，不向后续任意步骤盲目叠加位移。无唯一触发图时不会执行子流程动作。
+- 未触发日志标明“等待触发（不代表执行失败）”，附原位容差、全视口扫描及歧义提示。vision.js/triggerComparison 生成左侧录制模板、右侧当前原位区域的对照图；engine.js 转发日志图片，沿用主进程/UI 的 64 张、24MiB 内存上限及放大窗口，不将图片写入 activity.log。
+- 实测修复后左侧触发匹配 100%，Canvas 点击从 (897,557) 重定位至 (180,557)，子流程完成并开启自动攻击。诊断脚本和业务截图只存忽略目录 test-results，不打包用户数据，不改写用户原流程。
+- 无新增生产模块、依赖、IPC 或流程字段；新增 test/trigger-diagnostics-ui.js 验证真实日志图片从 Runner 到 GUI 的转发、放大、刷新恢复与磁盘日志不含图像。测试目录树已同步；完整验收范围见 VALIDATION.md。

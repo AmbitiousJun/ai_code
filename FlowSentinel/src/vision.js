@@ -26,6 +26,24 @@ function match(screenBuffer, templateBuffer, rect, radius = 12) {
     }
     return 1 - bad / count;
   };
+  // Small/narrow templates are sensitive to a single-pixel displacement.
+  // Coarse top-four ranking can discard the neighbours of the true match.
+  if (Math.min(template.width, template.height) < 36 && template.width * template.height <= 4096) {
+    let best = { score: 0, x: rect.x, y: rect.y };
+    const consider = (x, y) => {
+      if (x < 0 || y < 0 || x + template.width > screen.width || y + template.height > screen.height) return;
+      const s = score(x, y, 1);
+      if (s > best.score) best = { score: s, x, y };
+    };
+    consider(rect.x, rect.y);
+    for (let y = Math.max(0, rect.y-radius); y <= Math.min(screen.height-template.height, rect.y+radius); y++) {
+      for (let x = Math.max(0, rect.x-radius); x <= Math.min(screen.width-template.width, rect.x+radius); x++) {
+        if (best.score === 1) return best;
+        consider(x, y);
+      }
+    }
+    return best;
+  }
   const candidates = [];
   const add = (x,y) => {
     if (x<0 || y<0 || x+template.width>screen.width || y+template.height>screen.height) return;
@@ -43,6 +61,63 @@ function match(screenBuffer, templateBuffer, rect, radius = 12) {
   }
   return best;
 }
+// Trigger conditions may move across seats within this instance's page viewport.
+async function matchTrigger(screenBuffer, templateBuffer, rect, radius, threshold, signal) {
+  const stopped=()=>{if(signal?.aborted)throw new Error('STOPPED');};
+  stopped();
+  const local=match(screenBuffer,templateBuffer,rect,radius);
+  if(local.score>=threshold)return {...local,region:'local'};
+  const screen=PNG.sync.read(screenBuffer),template=PNG.sync.read(templateBuffer);
+  const w=template.width,h=template.height,total=w*h;
+  const allowed=Math.floor(total*(1-threshold)+1e-9);
+  // Necessary colour-count bounds cheaply reject most empty backgrounds.
+  // ±32 expansion makes these filters conservative, never a new threshold.
+  const filters=[],pitch=screen.width+1;
+  for(let channel=0;channel<3;channel++){
+    const values=[];for(let i=channel;i<template.data.length;i+=4)values.push(template.data[i]);
+    values.sort((a,b)=>a-b);const median=values[Math.floor(values.length/2)];
+    for(const lower of [true,false]){
+      const required=values.filter(v=>lower?v<=median:v>=median).length-allowed;
+      if(required<=0)continue;
+      const limit=median+(lower?32:-32),table=new Int32Array(pitch*(screen.height+1));
+      for(let y=0;y<screen.height;y++){
+        if(y%32===0){await new Promise(resolve=>setImmediate(resolve));stopped();}
+        let row=0;for(let x=0;x<screen.width;x++){
+          const value=screen.data[(y*screen.width+x)*4+channel];row+=Number(lower?value<=limit:value>=limit);
+          table[(y+1)*pitch+x+1]=table[y*pitch+x+1]+row;
+        }
+      }
+      filters.push({table,required});
+    }
+  }
+  // Exact rejection: every differing pixel counts towards the same final budget.
+  // Sample distinctive positions first, then visit remaining pixels once.
+  const offsets=[],seen=new Set();
+  const stride=Math.max(1,Math.floor(Math.min(w,h)/8));
+  for(let y=0;y<h;y+=stride)for(let x=0;x<w;x+=stride){const n=y*w+x;offsets.push(n);seen.add(n);}
+  for(let n=0;n<total;n++)if(!seen.has(n))offsets.push(n);
+  const screenOffsets=offsets.map(n=>(Math.floor(n/w)*screen.width+n%w)*4);
+  let best=null;
+  for(let y=0;y<=screen.height-h;y++){
+    if(y%8===0){await new Promise(resolve=>setImmediate(resolve));stopped();}
+    for(let x=0;x<=screen.width-w;x++){
+      if(filters.some(({table,required})=>table[(y+h)*pitch+x+w]-table[y*pitch+x+w]-table[(y+h)*pitch+x]+table[y*pitch+x]<required))continue;
+      let bad=0;
+      const origin=(y*screen.width+x)*4;
+      for(let i=0;i<offsets.length;i++){
+        const a=origin+screenOffsets[i],b=offsets[i]*4;
+        if((Math.abs(screen.data[a]-template.data[b])>32||Math.abs(screen.data[a+1]-template.data[b+1])>32||Math.abs(screen.data[a+2]-template.data[b+2])>32)&&++bad>allowed)break;
+      }
+      if(bad>allowed)continue;
+      const score=1-bad/total;
+      if(best&&Math.hypot(x-best.x,y-best.y)>8)return {...best,region:'viewport',ambiguous:true};
+      if(!best||score>best.score)best={x,y,score};
+    }
+  }
+  stopped();
+  return best?{...best,region:'viewport',ambiguous:false}: {...local,region:'local'};
+}
+
 // Search only this instance's canvas; yield to keep Stop and other instances responsive.
 async function locateClick(screenBuffer, visual, point, bounds, signal) {
   const fail=code=>{const e=new Error(code);e.code=code;throw e;};
@@ -99,4 +174,14 @@ async function locateClick(screenBuffer, visual, point, bounds, signal) {
   const core=await search();if(!core)fail('VISUAL_NOT_FOUND');
   return {...core,region:'center'};
 }
-module.exports = { crop, match, locateClick };
+// Diagnostic only: original template at left, current recorded region at right.
+function triggerComparison(screenBuffer, templateBuffer, rect) {
+  const screen=PNG.sync.read(screenBuffer),template=PNG.sync.read(templateBuffer);
+  if(rect.x<0||rect.y<0||rect.x+template.width>screen.width||rect.y+template.height>screen.height)return;
+  const output=new PNG({width:template.width*2+8,height:template.height});
+  output.data.fill(255);
+  PNG.bitblt(template,output,0,0,template.width,template.height,0,0);
+  PNG.bitblt(screen,output,rect.x,rect.y,template.width,template.height,template.width+8,0);
+  return PNG.sync.write(output);
+}
+module.exports = { crop, match, matchTrigger, locateClick, triggerComparison };

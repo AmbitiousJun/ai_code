@@ -152,7 +152,7 @@ function renderSubflows(flow){
   $('subflowList').replaceChildren();
   for(const sub of flow?.subflows||[]){
     const box=document.createElement('details'),title=document.createElement('summary');title.textContent=sub.name+' · '+sub.steps.length+' 步 · '+(sub.trigger.type==='cron'?sub.trigger.expression:'截图触发');box.append(title);
-    if(sub.trigger.type==='image'){const img=document.createElement('img');img.src=sub.trigger.trusted.image;img.alt='子流程触发截图';img.className='sub-trigger-preview';box.append(img);}
+    if(sub.trigger.type==='image'){const img=document.createElement('img');img.src=sub.trigger.trusted.image;img.alt='子流程触发截图';img.className='sub-trigger-preview';box.append(img);const r=sub.trigger.trusted.rect,info=document.createElement('p');info.textContent='触发图 '+r.width+' × '+r.height+' 像素'+(Math.min(r.width,r.height)<24?' · 选区较窄，建议重新录入并框选完整稳定图标，避开动画边缘':'');box.append(info);}
     for(const step of sub.steps){const row=document.createElement('p');row.textContent=step.index+'. '+step.label+' · 标签页 '+(step.page+1);box.append(row);}
     const remove=document.createElement('button');remove.textContent='删除子流程';remove.className='danger delete-subflow';remove.onclick=()=>{if(confirm('删除子流程“'+sub.name+'”？'))task(async()=>upsert(await call('deleteSubflow',{id:selected,subId:sub.id})));};box.append(remove);$('subflowList').append(box);
   }

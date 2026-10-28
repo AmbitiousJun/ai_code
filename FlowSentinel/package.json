@@ -1,6 +1,6 @@
 {
   "name": "flow-sentinel",
-  "version": "1.4.2",
+  "version": "1.4.4",
   "description": "FlowSentinel 浏览器流程录制与巡检",
   "main": "src/main.js",
   "author": "FlowSentinel",
