@@ -86,6 +86,10 @@ function color(e) {
   if (e.kind === "warning" || e.status >= 300) return "warn";
   return e.status === 200 ? "good" : "info";
 }
+const beijingTime = new Intl.DateTimeFormat("zh-CN", {
+  timeZone: "Asia/Shanghai", hourCycle: "h23",
+  hour: "2-digit", minute: "2-digit", second: "2-digit",
+});
 function render() {
   const f = $("filter").value,
     fragment = document.createDocumentFragment();
@@ -115,7 +119,7 @@ function render() {
       );
     s.className = color(e);
     tr.append(
-      create("td", e.time.slice(11, 19) + "Z"),
+      create("td", beijingTime.format(new Date(e.time))),
       s,
       create(
         "td",
@@ -133,10 +137,13 @@ function render() {
   }
   $("events").replaceChildren(fragment);
 }
+let viewedReport = "";
 async function report(id) {
+  viewedReport = id;
   const root = "/reports/" + id + "/",
     j = await api(root + "report.json"),
     box = $("report");
+  if (viewedReport !== id) return;
   box.replaceChildren();
   const links = [
     ["完整 JSON", "report.json"],
@@ -184,19 +191,102 @@ async function report(id) {
     list.append(create("div", s.sources.join(", ") + " · " + s.url));
   box.append(list);
 }
+function reportBoxes() {
+  return [...$("history").querySelectorAll("input:checked")];
+}
+function updateSelection() {
+  const count = reportBoxes().length;
+  const total = $("history").querySelectorAll("input").length;
+  $("selectAll").checked = count > 0 && count === total;
+  $("selectAll").indeterminate = count > 0 && count < total;
+  $("deleteReports").disabled = !count;
+  $("deleteReports").textContent = "删除所选报告" + (count ? "（" + count + "）" : "");
+}
+async function removeSelected() {
+  const ids = reportBoxes().map(box => box.value);
+  if (!ids.length || !confirm("永久删除所选的 " + ids.length + " 份报告及其日志和截图？")) return;
+  try {
+    await api("/api/history/delete", { ids });
+  } finally {
+    await history();
+  }
+}
 async function history() {
   const ids = await api("/api/history");
+  const checked = new Set(reportBoxes().map(box => box.value));
+  if (viewedReport && !ids.includes(viewedReport)) {
+    viewedReport = "";
+    $("report").replaceChildren();
+  }
   $("history").replaceChildren();
   for (const id of ids) {
-    const b = create("button", id.slice(0, 19).replace("T", " ") + " UTC");
+    const iso = id.replace(/T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z$/, "T$1:$2:$3.$4Z");
+    const date = new Date(iso);
+    const label = Number.isNaN(date.getTime()) ? id : date.toLocaleString("zh-CN", {
+      timeZone: "Asia/Shanghai", hour12: false,
+    }) + " 北京时间";
+    const b = create("button", label);
     b.className = "secondary";
     b.onclick = () => report(id).catch(show);
-    $("history").append(b);
+    const row = create("div"), box = create("input");
+    row.className = "historyRow";
+    box.type = "checkbox";
+    box.setAttribute("aria-label", "选择 " + label);
+    box.value = id;
+    box.checked = checked.has(id);
+    row.append(box, b);
+    $("history").append(row);
   }
+  $("reportTools").hidden = !ids.length;
+  updateSelection();
   if (!ids.length) $("history").textContent = "暂无已完成任务";
+  return ids;
 }
 function show(e) {
   if ($("err")) $("err").textContent = e.message;
+}
+let previewKey = "", previewBusy = false, nextFrame = 0, frameUrl;
+function clearFrame() {
+  $("screen").contentDocument.body.textContent = "正在获取画面…";
+  if (frameUrl) URL.revokeObjectURL(frameUrl);
+  frameUrl = null;
+}
+async function updatePreview(job) {
+  const running = job?.status === "running";
+  $("preview").hidden = !running;
+  const key = running && $("preview").open && !document.hidden
+    ? "/api/preview?job=" + job.id + "&run=" + (job.done + 1) : "";
+  if (key !== previewKey) {
+    previewKey = key;
+    clearFrame();
+    nextFrame = 0;
+  }
+  if (!key || previewBusy || Date.now() < nextFrame) return;
+  previewBusy = true;
+  let url;
+  try {
+    const response = await fetch(key);
+    if (response.status !== 200) throw Error();
+    url = URL.createObjectURL(await response.blob());
+    const img = new Image();
+    img.alt = job.active + "的当前画面";
+    img.src = url;
+    await img.decode();
+    if (key !== previewKey) return;
+    clearFrame();
+    $("screen").contentDocument.body.replaceChildren(img);
+    frameUrl = url;
+    url = null;
+  } catch {
+    if (key === previewKey) {
+      clearFrame();
+      $("screen").contentDocument.body.textContent = "等待窗口画面…";
+    }
+  } finally {
+    if (url) URL.revokeObjectURL(url);
+    if (key === previewKey) nextFrame = Date.now() + 1000;
+    previewBusy = false;
+  }
 }
 async function poll() {
   try {
@@ -212,6 +302,7 @@ async function poll() {
       $("cap").value = c.cap / 1073741824;
       $("cap").dataset.ready = "1";
     }
+    updatePreview(j);
     if (j) {
       if (currentId !== j.id) {
         currentId = j.id;
@@ -240,8 +331,8 @@ async function poll() {
       $("stop").disabled = j.status !== "running";
       $("start").disabled = j.status === "running";
       if (j.status !== lastStatus && j.status !== "running") {
-        await history();
-        await report(j.id);
+        const ids = await history();
+        if (ids.includes(j.id)) await report(j.id);
       }
       lastStatus = j.status;
     }
@@ -253,6 +344,13 @@ async function poll() {
 }
 async function init() {
   const data = await api("/api/config");
+  $("version").textContent = "v" + data.version;
+  $("history").onchange = updateSelection;
+  $("selectAll").onchange = () => {
+    for (const box of $("history").querySelectorAll("input")) box.checked = $("selectAll").checked;
+    updateSelection();
+  };
+  $("deleteReports").onclick = () => removeSelected().catch(show);
   presets = data.presets;
   const s = data.settings;
   for (const k of ["template", "waitSeconds", "actions", "extraGets"])

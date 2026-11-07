@@ -42,7 +42,8 @@ function openUi(url) {
   }
 }
 const cache = new Cache(path.join(root, "cache"));
-let current = null,
+let preview = null,
+  current = null,
   ctrl = null;
 function start(cfg) {
   if (current?.status === "running") throw Error("已有任务正在运行");
@@ -69,7 +70,7 @@ function start(cfg) {
     signal = ctrl.signal,
     learned = new Set();
   const record = (e) => {
-    const event = { seq: ++job.seq, time: new Date().toISOString(), ...e };
+    const event = { seq: ++job.seq, time: new Date(Date.now() + 8 * 3600000).toISOString().replace("Z", "+08:00"), ...e };
     job.events.push(event);
     if (job.events.length > 2000) job.events.shift();
     fs.appendFileSync(
@@ -114,7 +115,9 @@ function start(cfg) {
       try {
         Object.assign(
           summary,
-          await runOne(row, cfg, cache, signal, emit, learned, shot),
+          await runOne(row, cfg, cache, signal, emit, learned, shot, (capture) => {
+            preview = { jobId: id, run, capture };
+          }),
           { status: "完成" },
         );
       } catch (e) {
@@ -122,6 +125,7 @@ function start(cfg) {
         summary.error = e.message;
         emit({ kind: "warning", message: e.message.split("\n")[0] });
       }
+      preview = null;
       summary.issues = issues;
       if (summary.status === "完成" && issues)
         summary.status = "完成（有异常）";
@@ -163,6 +167,13 @@ function start(cfg) {
       );
     });
   return { id };
+}
+function completedReports() {
+  return fs.readdirSync(reports, { withFileTypes: true })
+    .filter(entry => entry.isDirectory() &&
+      /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z$/.test(entry.name) &&
+      fs.existsSync(path.join(reports, entry.name, "report.json")))
+    .map(entry => entry.name).sort().reverse();
 }
 async function body(req) {
   let raw = "";
@@ -216,14 +227,37 @@ const server = http.createServer(async (req, res) => {
         server.close();
         return;
       }
+      if (p === "/api/history/delete") {
+        const available = new Set(completedReports());
+        if (!Array.isArray(data.ids) || !data.ids.length ||
+            data.ids.some(id => !available.has(id)))
+          return json({ error: "请选择已完成的任务报告，刷新后重试" }, 400);
+        for (const id of new Set(data.ids))
+          fs.rmSync(path.join(reports, id), { recursive: true });
+        return json({ ok: true });
+      }
       if (p === "/api/cache") {
         if (data.clear) cache.clear();
         else cache.resize(data.cap);
         return json(cache.stats());
       }
     }
+    if (req.method === "GET" && p === "/api/preview") {
+      const frame = preview;
+      const matches = frame && frame.jobId === u.searchParams.get("job") &&
+        frame.run === Number(u.searchParams.get("run"));
+      const jpeg = matches && await frame.capture();
+      res.setHeader("Cache-Control", "no-store");
+      if (!jpeg || frame !== preview || ctrl.signal.aborted) {
+        res.writeHead(204);
+        return res.end();
+      }
+      res.writeHead(200, { "Content-Type": "image/jpeg" });
+      return res.end(jpeg);
+    }
     if (p === "/api/config") {
       return json({
+        version: require("../package.json").version,
         presets,
         settings: fs.existsSync(settings)
           ? JSON.parse(fs.readFileSync(settings))
@@ -236,13 +270,7 @@ const server = http.createServer(async (req, res) => {
         cache: cache.stats(),
       });
     if (p === "/api/history")
-      return json(
-        fs
-          .readdirSync(reports)
-          .filter((id) => fs.existsSync(path.join(reports, id, "report.json")))
-          .sort()
-          .reverse(),
-      );
+      return json(completedReports());
     let file, mt;
     if (
       /^\/reports\/[\dTZ-]+\/(report\.json|events\.ndjson|\d+\.png)$/.test(p)

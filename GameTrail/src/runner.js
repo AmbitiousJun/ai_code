@@ -16,7 +16,7 @@ function frameUrl(req) {
   }
 }
 const parseable = (t) => /html|css|json/i.test(t);
-async function runOne(row, cfg, cache, signal, emit, learned, shot) {
+async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewReady) {
   const { device: d } = row;
   const opts = { headless: true };
   if (d.engine === "chromium" && !fs.existsSync(pw.chromium.executablePath()))
@@ -154,6 +154,17 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot) {
         })(),
       );
     });
+    if (onPreviewReady) {
+      let pendingFrame;
+      onPreviewReady(() => {
+        const target = ctx.pages().at(-1);
+        if (!target || signal.aborted) return null;
+        pendingFrame ||= target.screenshot({
+          type: "jpeg", quality: 60, scale: "css", timeout: 1800,
+        }).catch(() => null).finally(() => { pendingFrame = null; });
+        return pendingFrame;
+      });
+    }
     const nav = await page.goto(row.url, {
       waitUntil: "domcontentloaded",
       timeout: 45000,

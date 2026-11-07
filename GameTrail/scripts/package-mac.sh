@@ -12,11 +12,12 @@ app="$build_dir/GameTrail.app"
 resources="$app/Contents/Resources"
 mkdir -p "$app/Contents/MacOS" "$resources/native" dist
 cp "$node_bin" "$resources/node"
-cp -R src ui node_modules "$resources/"
+version=$("$node_bin" -p 'require("./package.json").version')
+cp -R src ui package.json node_modules "$resources/"
 swiftc -module-cache-path "$build_dir/swift-cache" -O native/vision.swift -o "$resources/native/vision"
 swiftc -module-cache-path "$build_dir/swift-cache" -O native/launcher.swift -o "$app/Contents/MacOS/GameTrail"
 cp native/GameTrail.icns "$resources/"
-cat > "$app/Contents/Info.plist" <<'PLIST'
+cat > "$app/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>CFBundleIdentifier</key><string>local.gametrail.workbench</string>
@@ -25,8 +26,8 @@ cat > "$app/Contents/Info.plist" <<'PLIST'
 <key>LSUIElement</key><true/>
 <key>CFBundleIconFile</key><string>GameTrail.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.1</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleShortVersionString</key><string>$version</string>
+<key>CFBundleVersion</key><string>4</string>
 </dict></plist>
 PLIST
-ditto -c -k --keepParent "$app" "dist/GameTrail-0.1.1-macOS-$(uname -m).zip"
+ditto -c -k --keepParent "$app" "dist/GameTrail-$version-macOS-$(uname -m).zip"

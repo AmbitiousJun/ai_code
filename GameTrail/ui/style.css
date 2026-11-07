@@ -255,3 +255,8 @@ details {
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+#preview { margin-bottom: 20px; }
+#screen { display: block; margin-top: 8px; width: min(100%, 480px); height: clamp(140px, 30vh, 270px); border: 0; border-radius: 8px; }
+#reportTools:not([hidden]), .historyRow { display: flex; align-items: center; gap: 8px; }
+.historyRow input { width: auto; }
