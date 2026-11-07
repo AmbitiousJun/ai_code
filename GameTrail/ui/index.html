@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="zh-CN">
+  <meta charset="UTF-8" /><meta
+    name="viewport"
+    content="width=device-width,initial-scale=1"
+  /><title>GameTrail · 游戏资源预热</title
+  ><link rel="stylesheet" href="/style.css" />
+  <header>
+    <div class="brand"><b>↗</b> GameTrail</div>
+    <span>本地资源预热工作台</span>
+    <button class="secondary" id="quit" style="margin-left: auto">
+      退出程序
+    </button>
+  </header>
+  <main>
+    <aside>
+      <h2>任务配置</h2>
+      <form id="form">
+        <label
+          >入口地址模板<textarea
+            required
+            id="template"
+            rows="3"
+          ></textarea></label
+        ><label
+          >模板变量 <small>每行一个变量，多个值用逗号分隔</small
+          ><textarea id="variables" rows="3"></textarea>
+        </label>
+        <fieldset>
+          <legend>浏览环境</legend>
+          <div id="devices"></div>
+        </fieldset>
+        <details>
+          <summary>自定义机型与探索参数</summary>
+          <label
+            >额外允许点击的入口名称<small
+              >所有游戏共用，按显示文字或节点名精确匹配，逗号分隔</small
+            ><input id="labels" placeholder="玩法介绍, Game Guide"
+          /></label>
+          <label
+            >自定义机型 JSON 数组<textarea
+              id="custom"
+              rows="4"
+              placeholder='[{"id":"tablet","name":"平板","engine":"chromium","viewport":{"width":1024,"height":768},"hasTouch":true}]'
+            ></textarea>
+          </label>
+          <label
+            >页面加载等待（秒）<input
+              id="waitSeconds"
+              type="number"
+              min="1"
+              max="120" /></label
+          ><label
+            >每环境探索步数<input
+              id="actions"
+              type="number"
+              min="0"
+              max="40" /></label
+          ><label
+            >每环境静态补抓上限<input
+              id="extraGets"
+              type="number"
+              min="0"
+              max="200"
+          /></label>
+        </details>
+        <label class="check"
+          ><input
+            id="explore"
+            type="checkbox"
+          />自动探索菜单、规则与帮助入口</label
+        >
+        <p id="estimate"></p>
+        <button id="start">启动任务</button>
+        <button type="button" class="secondary" id="stop" disabled>停止</button>
+        <p id="err" role="alert"></p>
+      </form>
+      <hr />
+      <h2>本地缓存</h2>
+      <p id="usage"></p>
+      <div class="inline">
+        <input
+          id="cap"
+          aria-label="缓存容量 GiB"
+          type="number"
+          min="0"
+          max="100"
+          step="any"
+        /><span>GiB</span><button class="secondary" id="save">保存</button
+        ><button class="secondary" id="clear">清空</button>
+      </div>
+    </aside>
+    <section>
+      <div class="sectiontitle">
+        <h1>运行监控</h1>
+        <span id="status">待启动</span>
+      </div>
+      <div class="metrics">
+        <article>
+          <small>已运行环境</small><strong id="done">0 / 0</strong>
+        </article>
+        <article>
+          <small>GET 200 资源</small><strong id="success">0</strong>
+        </article>
+        <article>
+          <small>缓存命中次数</small><strong id="hits">0</strong>
+        </article>
+        <article>
+          <small>请求异常次数</small><strong id="errors">0</strong>
+        </article>
+      </div>
+      <progress id="progress" max="1" value="0"></progress>
+      <p id="active">等待任务启动</p>
+      <div class="sectiontitle">
+        <h2>请求时间线</h2>
+        <select id="filter">
+          <option value="">全部事件</option>
+          <option value="bad">异常</option>
+          <option value="action">探索动作</option>
+          <option value="frame">iframe</option>
+          <option value="cache">缓存命中</option>
+        </select>
+      </div>
+      <div class="log">
+        <table>
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>状态</th>
+              <th>请求 / 事件</th>
+            </tr>
+          </thead>
+          <tbody id="events"></tbody>
+        </table>
+      </div>
+      <h2>任务报告</h2>
+      <div id="history"></div>
+      <div id="report"></div>
+    </section>
+  </main>
+  <script src="/app.js"></script>
+</html>

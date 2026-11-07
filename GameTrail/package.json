@@ -1,0 +1,25 @@
+{
+  "name": "gametrail",
+  "version": "0.1.0",
+  "main": "src/server.js",
+  "directories": {
+    "test": "test"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "start": "node src/server.js",
+    "browsers": "node scripts/install-browsers.js",
+    "package:mac": "bash scripts/package-mac.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "playwright": "1.48.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
