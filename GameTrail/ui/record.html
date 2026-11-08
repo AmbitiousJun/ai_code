@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GameTrail · 路径录制</title>
+<style>
+*{box-sizing:border-box}body{margin:0;height:100vh;display:flex;flex-direction:column;background:#18221e;color:#fff;font:15px system-ui}
+header{padding:10px 14px;display:flex;align-items:center;gap:10px}span{flex:1}button{padding:7px 12px}
+main{flex:1;min-height:0;display:grid;place-items:center}img{display:block;max-width:100%;max-height:100%;min-height:0;min-width:0;touch-action:manipulation;user-select:none}main{grid-template: minmax(0,1fr)/minmax(0,1fr)}
+#selection{position:fixed;box-sizing:border-box;border:2px solid #ffcf39;background:#ffcf3922;pointer-events:none}
+main.selecting img{cursor:crosshair;touch-action:none}
+</style><header><span id="status" role="status">正在连接当前游戏…</span><button id="pause" disabled>暂停录入</button><button id="pick" disabled>框选按钮 (F)</button><button id="finish" disabled>结束录制并验证</button><button id="discard" disabled>放弃</button></header>
+<main><img id="game" draggable="false" alt="当前游戏画面"></main><div id="selection" hidden></div><script src="/record.js"></script></html>

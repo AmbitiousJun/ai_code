@@ -2,12 +2,11 @@ process.env.PLAYWRIGHT_BROWSERS_PATH ||= "0";
 const pw = require("playwright"),
   fs = require("node:fs"),
   path = require("node:path");
-const { explore, sleep } = require("./explore");
-const { references } = require("./discover");
+const { explore, sleep, loadEntry } = require("./explore");
 const staticType = new Set(["script", "stylesheet", "image", "font", "media"]);
+const assetExtension = /\.(?:js|mjs|css|json|wasm|bin|atlas|plist|zip|png|jpe?g|webp|avif|gif|svg|ktx2?|pvr|mp3|ogg|wav|m4a|mp4|webm|woff2?|ttf|otf)$/i;
 const reusable = (req) =>
-  staticType.has(req.resourceType()) ||
-  /\.(json|wasm|bin|atlas|plist)(?:[?#]|$)/i.test(req.url());
+  staticType.has(req.resourceType()) || assetExtension.test(new URL(req.url()).pathname);
 function frameUrl(req) {
   try {
     return req.frame().url();
@@ -15,8 +14,48 @@ function frameUrl(req) {
     return undefined;
   }
 }
-const parseable = (t) => /html|css|json/i.test(t);
-async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewReady) {
+// WebKit has no Playwright mute launch flag. Silence media playback and divert
+// real-time Web Audio output while allowing the game's audio graph to keep running.
+function muteWebKit() {
+  const media = HTMLMediaElement.prototype;
+  const muted = Object.getOwnPropertyDescriptor(media, "muted");
+  Object.defineProperty(media, "muted", {
+    ...muted,
+    set() { muted.set.call(this, true); },
+  });
+  const play = media.play;
+  media.play = function(...args) {
+    muted.set.call(this, true);
+    return play.apply(this, args);
+  };
+  document.addEventListener("play", event => {
+    if (event.target instanceof HTMLMediaElement) muted.set.call(event.target, true);
+  }, true);
+
+  const originalConnect = AudioNode.prototype.connect;
+  const sinks = new WeakMap();
+  for (const method of ["connect", "disconnect"]) {
+    const original = AudioNode.prototype[method];
+    AudioNode.prototype[method] = function(...args) {
+      const context = this.context;
+      if (context instanceof AudioContext && args[0] === context.destination) {
+        if (!sinks.has(context)) {
+          const sink = context.createGain();
+          sink.gain.value = 0;
+          // Use the native connect to reach the actual audio output.
+          originalConnect.call(sink, context.destination);
+          sinks.set(context, sink);
+        }
+        const destination = args[0];
+        args[0] = sinks.get(context);
+        const result = original.apply(this, args);
+        return result === args[0] ? destination : result;
+      }
+      return original.apply(this, args);
+    };
+  }
+}
+async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewReady, manual) {
   const { device: d } = row;
   const opts = { headless: true };
   if (d.engine === "chromium" && !fs.existsSync(pw.chromium.executablePath()))
@@ -24,17 +63,8 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
   const browser = await pw[d.engine].launch(opts);
   const stop = () => browser.close().catch(() => {});
   signal.addEventListener("abort", stop, { once: true });
-  let timer,
-    expired = false;
   try {
-    if (signal.aborted) throw Error("已取消");
-    timer = setTimeout(
-      () => {
-        expired = true;
-        stop();
-      },
-      (100 + cfg.waitSeconds * 3 + cfg.actions * 5 + cfg.extraGets * 5) * 1000,
-    );
+    signal.throwIfAborted();
     const { id, name, engine, defaultBrowserType, ...device } = d;
     const locale = row.vars.lang || d.locale || "en-US";
     const ctx = await browser.newContext({
@@ -42,13 +72,26 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
       locale,
       serviceWorkers: "block",
     });
-    const observed = { serial: 0, frames: 0, entry: row.url },
+    if (engine === "webkit") await ctx.addInitScript(muteWebKit);
+    // Headless Chromium includes --mute-audio in Playwright's launch arguments.
+    const observed = { quietMs: (cfg.quietSeconds ?? 1) * 1000, hasTouch: !!d.hasTouch, active: new Set(), paths: new Set(), lastGET: 0, frames: 0, entry: row.url },
       seen = new Set(),
-      queue = new Set(),
       pending = new Set(),
       hits = new WeakSet();
-    const profile = JSON.stringify([d, locale]);
+    if (cfg.explore && cfg.exploreMode === "source")
+      await ctx.addInitScript(require("./frame-functions").installFrameScanner);
+    else if (cfg.explore && !manual) await ctx.addInitScript(() => {
+      const targets = new WeakSet();
+      Object.defineProperty(window, "__gameTrailTargets", { value: targets });
+      const register = EventTarget.prototype.addEventListener;
+      EventTarget.prototype.addEventListener = function(type, listener, options) {
+        if (listener && this instanceof Element && ["click", "pointerup", "touchend"].includes(type))
+          targets.add(this);
+        return register.call(this, type, listener, options);
+      };
+    });
     const page = await ctx.newPage();
+    if (manual?.install) await manual.install(ctx, page);
     ctx.on("weberror", (e) =>
       emit({ kind: "warning", message: "页面脚本 · " + e.error().message }),
     );
@@ -69,8 +112,8 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
       try {
         const req = route.request();
         if (req.method() === "GET" && reusable(req)) {
-          const k = cache.key(req.url(), await req.allHeaders(), profile),
-            cached = cache.get(k);
+          const url = req.url(), headers = await req.allHeaders();
+          const cached = !cache.bypassReason(url, headers) && cache.get(cache.key(url));
           if (cached) {
             hits.add(req);
             await route.fulfill(cached);
@@ -79,6 +122,7 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
         }
         await route.continue();
       } catch (e) {
+        hits.delete(route.request());
         emit({
           kind: "warning",
           message: "请求拦截回退 · " + e.message.split("\n")[0],
@@ -89,7 +133,13 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
     ctx.on("request", (r) => {
       if (r.method() === "GET") {
         seen.add(r.url());
-        observed.serial++;
+        const url = new URL(r.url());
+        const key = url.origin + url.pathname;
+        if (!observed.paths.has(key)) {
+          observed.paths.add(key);
+          observed.active.add(r);
+          observed.lastGET = Date.now();
+        }
       }
       emit({
         kind: "request",
@@ -106,10 +156,11 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
         message: r.failure()?.errorText,
       }),
     );
-    function collect(body, type, url) {
-      for (const u of references(body.toString("utf8"), type, url))
-        if (queue.size < 5000) queue.add(u);
+    function finished(r) {
+      if (observed.active.delete(r)) observed.lastGET = Date.now();
     }
+    ctx.on("requestfinished", finished);
+    ctx.on("requestfailed", finished);
     ctx.on("response", (r) => {
       const req = r.request(),
         url = r.url(),
@@ -124,40 +175,38 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
         source: hit ? "cache" : "network",
         message: hit ? "本地缓存" : "网络响应",
       });
-      if (req.method() !== "GET" || status !== 200) return;
+      if (hit || req.method() !== "GET" || status !== 200 || !reusable(req)) return;
+      const decision = (message) => emit({kind: "cacheDecision", method: "GET", url, message});
       track(
         (async () => {
-          const h = await r.allHeaders(),
-            type = h["content-type"] || "",
-            size =
-              Number(h["content-length"]) ||
-              (reusable(req) && cache.policy(h)
-                ? (await req.sizes().catch(() => ({}))).responseBodySize
-                : 0);
-          const parse =
-            cfg.extraGets &&
-            parseable(type) &&
-            (!size || size <= 2 * 1024 ** 2);
-          const key =
-            !hit &&
-            reusable(req) &&
-            cache.policy(h) &&
-            size > 0 &&
-            size <= 16 * 1024 ** 2
-              ? cache.key(url, await req.allHeaders(), profile)
-              : null;
-          if (parse || key) {
-            const buf = await r.body();
-            if (parse && buf.length <= 2 * 1024 ** 2) collect(buf, type, url);
-            if (key) cache.put(key, h, buf);
+          const requestHeaders = await req.allHeaders();
+          const bypass = cache.bypassReason(url, requestHeaders);
+          if (bypass) return decision("跳过缓存 · " + bypass);
+          const headers = await r.allHeaders();
+          const key = cache.key(url);
+          const ttl = cache.policy(headers, url);
+          if (!ttl) {
+            const reason = cache.responseRestricted(headers)
+              ? "响应限制缓存" : "缺少有效期或已过期";
+            return decision("跳过缓存 · " + reason);
           }
-        })(),
+          const limit = Math.min(cache.cap, 16 * 1024 ** 2);
+          let size = Number(headers["content-length"]);
+          if (!Number.isFinite(size)) {
+            if (await r.finished()) return decision("跳过缓存 · 下载未完成");
+            size = (await req.sizes()).responseBodySize;
+          }
+          if (size > limit) return decision("跳过缓存 · 超出大小限制");
+          const body = await r.body();
+          if (!body.length || body.length > limit) return decision("跳过缓存 · 正文为空或超出大小限制");
+          decision(cache.put(key, headers, body, ttl) ? "已写入本地缓存" : "未写入 · 已有条目或容量已调整");
+        })().catch(() => decision("未写入 · 读取响应正文或缓存操作失败")),
       );
     });
     if (onPreviewReady) {
       let pendingFrame;
       onPreviewReady(() => {
-        const target = ctx.pages().at(-1);
+        const target = manual?.previewMain ? page : ctx.pages().at(-1);
         if (!target || signal.aborted) return null;
         pendingFrame ||= target.screenshot({
           type: "jpeg", quality: 60, scale: "css", timeout: 1800,
@@ -165,14 +214,7 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
         return pendingFrame;
       });
     }
-    const nav = await page.goto(row.url, {
-      waitUntil: "domcontentloaded",
-      timeout: 45000,
-    });
-    if (!nav || nav.status() >= 400)
-      throw Error("入口 HTTP " + (nav?.status() || "无响应"));
-    observed.landing = page.url();
-    await page.waitForTimeout(cfg.waitSeconds * 1000);
+    await loadEntry(page, observed, cfg.waitSeconds, signal);
     if (signal.aborted) throw Error("已取消");
     if (cfg.explore) {
       for (const frame of page.frames()) {
@@ -185,80 +227,15 @@ async function runOne(row, cfg, cache, signal, emit, learned, shot, onPreviewRea
           await frame.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
       }
     }
-    const clicks = cfg.explore
-      ? await explore(page, ctx, cfg, signal, emit, learned, observed)
-      : 0;
+    let clicks = 0;
+    if (manual) await manual.interact(page, observed);
+    else if (cfg.explore) clicks = await explore(page, ctx, cfg, signal, emit, library, observed, row.phase);
     if (!signal.aborted)
       await page.screenshot({ path: shot, timeout: 4000 }).catch(() => {});
     await Promise.race([Promise.allSettled([...pending]), sleep(1500)]);
-    let extra = 0;
-    for (const u of queue) {
-      if (signal.aborted || extra >= cfg.extraGets) break;
-      if (seen.has(u)) continue;
-      seen.add(u);
-      extra++;
-      emit({ kind: "request", method: "GET", url: u, message: "静态候选" });
-      try {
-        const headers = {
-          "accept-language": locale,
-          "user-agent": device.userAgent || "GameTrail",
-          referer: page.url(),
-        };
-        const cookies = await ctx.cookies(u);
-        const key =
-          !cookies.length && cache.key(u, headers, "supplement:" + profile);
-        const cached = cache.get(key);
-        if (cached) {
-          emit({
-            kind: "response",
-            method: "GET",
-            url: u,
-            status: 200,
-            source: "cache",
-            message: "静态补抓 · 本地缓存",
-          });
-          if (parseable(cached.headers["content-type"] || ""))
-            collect(cached.body, cached.headers["content-type"], u);
-          continue;
-        }
-        const r = await ctx.request.get(u, {
-          headers,
-          timeout: 5000,
-          maxRedirects: 0,
-        });
-        try {
-          emit({
-            kind: "response",
-            method: "GET",
-            url: u,
-            status: r.status(),
-            source: "supplement",
-            message: "静态补抓",
-          });
-          const h = r.headers(),
-            parse = parseable(h["content-type"] || "");
-          if (r.status() === 200 && (parse || (key && cache.policy(h)))) {
-            const b = await r.body();
-            if (parse && b.length <= 2 * 1024 ** 2)
-              collect(b, h["content-type"], u);
-            if (!/html/i.test(h["content-type"] || "")) cache.put(key, h, b);
-          }
-        } finally {
-          await r.dispose();
-        }
-      } catch (e) {
-        emit({
-          kind: "failed",
-          method: "GET",
-          url: u,
-          message: e.message.split("\n")[0],
-        });
-      }
-    }
-    if (expired || signal.aborted) throw Error(expired ? "运行超时" : "已取消");
-    return { clicks, frames: observed.frames, extra, uniqueGET: seen.size };
+    signal.throwIfAborted();
+    return { clicks, frames: observed.frames, uniqueGET: seen.size };
   } finally {
-    clearTimeout(timer);
     signal.removeEventListener("abort", stop);
     await browser.close().catch(() => {});
   }

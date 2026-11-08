@@ -15,24 +15,24 @@ const defaults = {
   selected: ["win"],
   custom: [],
   explore: true,
-  labels: [],
+  exploreMode: "manual",
   waitSeconds: 60,
+  quietSeconds: 1,
+  pixelTimeout: 15,
+  pixelSimilarity: 94,
   actions: 8,
-  extraGets: 40,
 };
 function plan(input) {
   const cfg = { ...defaults, ...input };
-  if (
-    !Array.isArray(cfg.labels) ||
-    cfg.labels.length > 40 ||
-    cfg.labels.some((v) => typeof v !== "string" || !v.trim() || v.length > 80)
-  )
-    throw Error("额外入口最多 40 个，每项 1–80 字符");
   const keys = [
     ...new Set([...cfg.template.matchAll(/\{([\w-]+)\}/g)].map((m) => m[1])),
   ];
   if (/[{}]/.test(cfg.template.replace(/\{[\w-]+\}/g, "")))
     throw Error("模板占位符格式无效");
+  const primary = cfg.primaryVariable ?? (keys.includes("gameId") ? "gameId" : "");
+  if (primary && !keys.includes(primary)) throw Error("主隔离变量必须是模板中的占位符");
+  if (primary) keys.unshift(...keys.splice(keys.indexOf(primary), 1));
+  const groups = new Set();
   let rows = [{}];
   for (const key of keys) {
     const values = cfg.variables[key];
@@ -43,8 +43,6 @@ function plan(input) {
     )
       throw Error("请填写模板变量 " + key);
     const unique = [...new Set(values.map(String))];
-    if (rows.length * unique.length > 2000)
-      throw Error("单任务最多 2000 个组合");
     rows = rows.flatMap((r) => unique.map((v) => ({ ...r, [key]: v })));
   }
   for (const p of cfg.custom) {
@@ -65,16 +63,20 @@ function plan(input) {
   if (new Set(available.map((p) => p.id)).size !== available.length)
     throw Error("机型 id 重复");
   const selected = available.filter((p) => cfg.selected.includes(p.id));
-  if (!selected.length || rows.length * selected.length > 2000)
-    throw Error("请选择机型，且运行数不超过 2000");
+  if (!selected.length) throw Error("请选择机型");
   for (const [k, min, max] of [
-    ["waitSeconds", 1, 120],
+    ["waitSeconds", 1, Infinity],
+    ["pixelTimeout", 1, 120],
+    ["pixelSimilarity", 1, 100],
     ["actions", 0, 40],
-    ["extraGets", 0, 200],
   ])
     if (!Number.isInteger(cfg[k]) || cfg[k] < min || cfg[k] > max)
       throw Error("参数超出范围 " + k);
-  return rows.flatMap((vars) => {
+  if (!Number.isFinite(cfg.quietSeconds) || cfg.quietSeconds < 0.1 || cfg.quietSeconds > 30)
+    throw Error("GET 静默窗口应在 0.1–30 秒之间");
+  const manual = cfg.explore && cfg.exploreMode === "manual";
+  const recordings = [];
+  const runs = rows.flatMap((vars) => {
     const u = new URL(
       cfg.template.replace(/\{([\w-]+)\}/g, (_, k) =>
         encodeURIComponent(vars[k]),
@@ -82,7 +84,17 @@ function plan(input) {
     );
     if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
       throw Error("请输入 HTTP(S) 入口");
-    return selected.map((device) => ({ url: u.href, vars, device }));
+    return selected.flatMap((device) => {
+      const group = primary ? vars[primary] : String(groups.size + 1);
+      const row = { url: u.href, vars, device, group, primary };
+      const discover = cfg.explore && cfg.actions > 0 && !groups.has(group);
+      if (manual && !groups.has(group)) recordings.push({ ...row, phase: "record" });
+      groups.add(group);
+      if (manual) return [{ ...row, phase: "replay" }];
+      const run = { ...row, phase: cfg.explore && cfg.actions ? "replay" : "load" };
+      return discover ? [{ ...row, phase: "discover" }, run] : [run];
+    });
   });
+  return [...recordings, ...runs];
 }
 module.exports = { presets, defaults, plan };

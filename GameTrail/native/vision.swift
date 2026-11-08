@@ -12,7 +12,7 @@ do {
     let result: [[String: Any]] = (request.results ?? []).compactMap { observation in
         guard let candidate = observation.topCandidates(1).first, candidate.confidence >= 0.75 else { return nil }
         let box = observation.boundingBox
-        return ["text": candidate.string, "x": box.midX, "y": 1-box.midY]
+        return ["text": candidate.string, "x": box.midX, "y": 1-box.midY, "rw": box.width, "rh": box.height]
     }
     FileHandle.standardOutput.write(try JSONSerialization.data(withJSONObject: result))
 } catch { exit(1) }

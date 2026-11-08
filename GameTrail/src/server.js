@@ -8,6 +8,8 @@ const { spawn } = require("node:child_process");
 const { Cache } = require("./cache"),
   { defaults, presets, plan } = require("./config"),
   { runOne } = require("./runner");
+const { runManual, ManualPrompt } = require("./manual");
+let manualPrompt;
 const root =
   process.env.GAMETRAIL_DATA ||
   path.join(
@@ -46,6 +48,8 @@ let preview = null,
   current = null,
   ctrl = null;
 function start(cfg) {
+  delete cfg.labels;
+  delete cfg.extraGets;
   if (current?.status === "running") throw Error("已有任务正在运行");
   const rows = plan(cfg),
     id = new Date().toISOString().replace(/[:.]/g, "-"),
@@ -68,7 +72,8 @@ function start(cfg) {
   ctrl = new AbortController();
   const job = current,
     signal = ctrl.signal,
-    learned = new Set();
+    groups = new Map();
+  manualPrompt = new ManualPrompt(signal, view => { job.manual = view; });
   const record = (e) => {
     const event = { seq: ++job.seq, time: new Date(Date.now() + 8 * 3600000).toISOString().replace("Z", "+08:00"), ...e };
     job.events.push(event);
@@ -96,11 +101,20 @@ function start(cfg) {
         label = [Object.values(row.vars).join(" / "), row.device.name]
           .filter(Boolean)
           .join(" · ");
-      job.active = label;
+      if (!groups.has(row.group)) groups.set(row.group, []);
+      const library = groups.get(row.group);
+      const groupLabel = row.primary ? row.primary + "=" + row.group : "环境 " + row.group;
+      const phaseLabel = row.phase === "record" ? "手动录入" : row.phase === "discover" ? "发现路径" : row.phase === "replay" ? "重放路径" : "加载资源";
+      job.active = [groupLabel, phaseLabel, label].join(" · ");
+      job.paths = { groupLabel, phaseLabel, count: library.length };
       let issues = 0;
       const emit = (e) => {
         if (e.kind === "warning" || e.kind === "failed" || e.status >= 400)
           issues++;
+        if (e.kind === "action") {
+          job.paths.count = library.length;
+          job.paths.activity = e.message;
+        }
         record({ run, ...e });
       };
       const summary = {
@@ -108,16 +122,18 @@ function start(cfg) {
         label,
         url: row.url,
         device: row.device.id,
-        vars: row.vars,
+        vars: row.vars, group: row.group, phase: phaseLabel,
       };
       const shot = path.join(dir, run + ".png");
-      emit({ kind: "run", message: label });
+      emit({ kind: "run", message: job.active });
+      const isManual = cfg.explore && cfg.exploreMode === "manual";
+      const execute = isManual ? runManual : runOne;
+      const extraArgs = isManual ? [manualPrompt] : [];
+      const capturePreview = capture => { preview = { jobId: id, run, capture }; };
       try {
         Object.assign(
           summary,
-          await runOne(row, cfg, cache, signal, emit, learned, shot, (capture) => {
-            preview = { jobId: id, run, capture };
-          }),
+          await execute(row, cfg, cache, signal, emit, library, shot, capturePreview, ...extraArgs),
           { status: "完成" },
         );
       } catch (e) {
@@ -154,6 +170,8 @@ function start(cfg) {
             total: job.total,
             done: job.done,
             runs: job.runs,
+            primaryVariable: rows[0].primary,
+            pathGroups: [...groups].map(([value, paths]) => ({ value, paths })),
             errors: job.errors,
             resources: [...job.success.values()].map((s) => ({
               ...s,
@@ -216,6 +234,37 @@ const server = http.createServer(async (req, res) => {
       if (p === "/api/start") return json(start({ ...defaults, ...data }));
       if (p === "/api/plan")
         return json({ total: plan({ ...defaults, ...data }).length });
+      if (p === "/api/record-input") {
+        const page = manualPrompt?.recordPage;
+        if (!page || !manualPrompt?.view?.session || manualPrompt.view.token !== data.token)
+          throw Error("录制已结束");
+        if (manualPrompt.inputBusy) throw Error("请等待当前操作完成");
+        if (data.mode === "pause" || data.mode === "resume") {
+          manualPrompt.view.paused = data.mode === "pause";
+          manualPrompt.view.note = manualPrompt.view.paused ? "已暂停录入。可操作游戏返回上一步，再按 F 框选按钮。" : "正在录制当前预览页面";
+          return json({ok:true});
+        }
+        manualPrompt.inputBusy = true;
+        try {
+          if (data.mode === "pixels") {
+            const {rgb,width,height,viewWidth,viewHeight} = data.template;
+            await manualPrompt.recordPixels({rgb,width,height,viewWidth,viewHeight});
+            return json({ok:true});
+          }
+          const size = page.viewportSize();
+          if (!size || ![data.x, data.y].every(n => Number.isFinite(n) && n >= 0 && n < 1))
+            throw Error("操作位置无效");
+          const x = data.x * size.width, y = data.y * size.height;
+          if (manualPrompt.hasTouch) await page.touchscreen.tap(x, y);
+          else await page.mouse.click(x, y);
+          return json({ok:true});
+        } finally { manualPrompt.inputBusy = false; }
+      }
+      if (p === "/api/manual") {
+        if (!manualPrompt?.submit) throw Error("当前没有待处理的录入操作");
+        manualPrompt.submit(data);
+        return json({ok:true});
+      }
       if (p === "/api/stop") {
         ctrl?.abort();
         return json({ ok: true });
@@ -242,6 +291,12 @@ const server = http.createServer(async (req, res) => {
         return json(cache.stats());
       }
     }
+    if (p === "/api/record-state") {
+      const view = manualPrompt?.view;
+      return json(view?.session && view.session === u.searchParams.get("session")
+        ? {token:view.token, note:view.note, paused:!!view.paused, job:current.id, run:current.done+1}
+        : null);
+    }
     if (req.method === "GET" && p === "/api/preview") {
       const frame = preview;
       const matches = frame && frame.jobId === u.searchParams.get("job") &&
@@ -260,7 +315,7 @@ const server = http.createServer(async (req, res) => {
         version: require("../package.json").version,
         presets,
         settings: fs.existsSync(settings)
-          ? JSON.parse(fs.readFileSync(settings))
+          ? { ...defaults, ...JSON.parse(fs.readFileSync(settings)) }
           : defaults,
       });
     }
@@ -281,14 +336,14 @@ const server = http.createServer(async (req, res) => {
         : p.endsWith(".json")
           ? "application/json"
           : "application/x-ndjson";
-    } else if (["/", "/app.js", "/style.css"].includes(p)) {
+    } else if (["/", "/record.html", "/record.js", "/app.js", "/style.css"].includes(p)) {
       file = path.join(
         __dirname,
         "../ui",
         p === "/" ? "index.html" : p.slice(1),
       );
       mt =
-        p === "/"
+        (p === "/" || p.endsWith(".html"))
           ? "text/html"
           : p.endsWith(".js")
             ? "application/javascript"

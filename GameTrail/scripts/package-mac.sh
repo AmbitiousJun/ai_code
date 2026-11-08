@@ -27,7 +27,9 @@ cat > "$app/Contents/Info.plist" <<PLIST
 <key>CFBundleIconFile</key><string>GameTrail.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$version</string>
-<key>CFBundleVersion</key><string>4</string>
+<key>CFBundleVersion</key><string>22</string>
 </dict></plist>
 PLIST
+codesign --force --sign - --timestamp=none "$app"
+codesign --verify --deep --strict "$app"
 ditto -c -k --keepParent "$app" "dist/GameTrail-$version-macOS-$(uname -m).zip"

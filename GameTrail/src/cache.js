@@ -53,26 +53,18 @@ class Cache {
     for (const { k } of this.db.prepare("SELECT k FROM items").all())
       this.drop(k);
   }
-  key(url, h, profile) {
-    if (
-      !this.cap ||
-      h.cookie ||
-      h.authorization ||
-      h.range ||
-      Object.keys(h).some((k) => k.startsWith("if-")) ||
-      /no-store|no-cache|max-age=0/i.test(h["cache-control"] || "") ||
-      /[?&](?:token|ssokey|session|signature|access_token)=/i.test(url)
-    )
-      return;
-    return sha(
-      JSON.stringify([
-        url,
-        profile,
-        Object.entries(h)
-          .filter(([k]) => !k.startsWith("if-"))
-          .sort(),
-      ]),
-    );
+  bypassReason(url, h) {
+    if (!this.cap) return "缓存容量为 0";
+    if (h.authorization || h.range || Object.keys(h).some(k => k.startsWith("if-")))
+      return "鉴权、范围或条件请求";
+    if (/no-cache/i.test(h.pragma || "") || /no-store|no-cache|max-age=0/i.test(h["cache-control"] || ""))
+      return "请求要求回源";
+    if (/[?&](?:token|ssokey|session|signature|access_token)=/i.test(url))
+      return "URL 含凭据参数";
+  }
+  key(url) {
+    const resource = new URL(url);
+    return sha(resource.origin + resource.pathname);
   }
   get(k) {
     if (!k) return;
@@ -88,26 +80,28 @@ class Cache {
       .run(Date.now(), k);
     return { body, headers: JSON.parse(row.headers), status: 200 };
   }
-  policy(h) {
+  responseRestricted(h) {
+    return Boolean(/no-store|no-cache|private/i.test(h["cache-control"] || "") ||
+      h["set-cookie"] || /(?:^|,)\s*(?:\*|cookie|authorization)\s*(?:,|$)/i.test(h.vary || ""));
+  }
+  policy(h, url) {
     const cc = h["cache-control"] || "";
-    if (
-      /no-store|no-cache|private/i.test(cc) ||
-      h["set-cookie"] ||
-      h.vary?.includes("*")
-    )
-      return 0;
+    if (this.responseRestricted(h)) return 0;
     const maxAge = cc.match(/(?:^|,)\s*max-age=(\d+)/i);
     const lifetime = maxAge
       ? (Number(maxAge[1]) - Number(h.age || 0)) * 1000
       : Date.parse(h.expires) - Date.now();
     if (Number.isFinite(lifetime)) return Math.max(0, lifetime);
     const modified = Date.parse(h["last-modified"]);
-    return Number.isFinite(modified)
-      ? Math.max(0, Math.min(86400000, (Date.now() - modified) * 0.1))
-      : 0;
+    if (Number.isFinite(modified))
+      return Math.max(0, Math.min(86400000, (Date.now() - modified) * 0.1));
+    // Game builds often embed a short content hash immediately before the extension.
+    if (!h.expires && !/max-age/i.test(cc) && url &&
+        /[.-][a-f0-9]{5,64}\.[a-z0-9]+$/i.test(new URL(url).pathname))
+      return Math.max(0, 3600000 - Number(h.age || 0) * 1000);
+    return 0;
   }
-  put(k, h, body) {
-    const ttl = this.policy(h);
+  put(k, h, body, ttl = this.policy(h)) {
     if (
       !k ||
       !ttl ||
@@ -116,7 +110,7 @@ class Cache {
       body.length > Math.min(this.cap, 16 * 1024 ** 2) ||
       this.db.prepare("SELECT 1 FROM items WHERE k=?").get(k)
     )
-      return;
+      return false;
     this.trim(body.length);
     const headers = { ...h };
     for (const n of [
@@ -136,6 +130,7 @@ class Cache {
         Date.now() + ttl,
         JSON.stringify(headers),
       );
+    return true;
   }
 }
 module.exports = { Cache };

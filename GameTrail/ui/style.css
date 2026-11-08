@@ -260,3 +260,6 @@ details {
 #screen { display: block; margin-top: 8px; width: min(100%, 480px); height: clamp(140px, 30vh, 270px); border: 0; border-radius: 8px; }
 #reportTools:not([hidden]), .historyRow { display: flex; align-items: center; gap: 8px; }
 .historyRow input { width: auto; }
+
+#manual { padding: 12px 16px; margin-bottom: 12px; border: 1px solid #c6d6c5; border-radius: 8px; }
+#manualControls { display: flex; flex-wrap: wrap; gap: 8px; }

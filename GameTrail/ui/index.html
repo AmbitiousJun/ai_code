@@ -26,17 +26,14 @@
           >模板变量 <small>每行一个变量，多个值用逗号分隔</small
           ><textarea id="variables" rows="3"></textarea>
         </label>
+        <label>主隔离变量<input id="primaryVariable" placeholder="例如 gameId" />
+          <small>手动模式先完成各组录入，再回放所有组合。留空时各环境独立探索。</small></label>
         <fieldset>
           <legend>浏览环境</legend>
           <div id="devices"></div>
         </fieldset>
         <details>
           <summary>自定义机型与探索参数</summary>
-          <label
-            >额外允许点击的入口名称<small
-              >所有游戏共用，按显示文字或节点名精确匹配，逗号分隔</small
-            ><input id="labels" placeholder="玩法介绍, Game Guide"
-          /></label>
           <label
             >自定义机型 JSON 数组<textarea
               id="custom"
@@ -45,31 +42,35 @@
             ></textarea>
           </label>
           <label
-            >页面加载等待（秒）<input
+            >页面加载等待上限（秒）<input
               id="waitSeconds"
               type="number"
               min="1"
-              max="120" /></label
+              required /></label
           ><label
-            >每环境探索步数<input
+            >GET 静默窗口（秒）<input id="quietSeconds" type="number" min="0.1" max="30" step="0.1" /></label
+          ><label
+            >框选步骤等待超时（秒）<input id="pixelTimeout" type="number" min="1" max="120" required /></label
+          ><label
+            >截图最低相似度（%）<input id="pixelSimilarity" type="number" min="1" max="100" required /></label
+          ><label
+            >每环境最多尝试的函数数 / 按钮路径深度<input
               id="actions"
               type="number"
               min="0"
-              max="40" /></label
-          ><label
-            >每环境静态补抓上限<input
-              id="extraGets"
-              type="number"
-              min="0"
-              max="200"
-          /></label>
+              max="40" /></label>
         </details>
         <label class="check"
           ><input
             id="explore"
             type="checkbox"
-          />自动探索菜单、规则与帮助入口</label
+          />开启探索与重放</label
         >
+        <label>探索方式<select id="exploreMode">
+          <option value="manual">手动录入特殊路径，再批量重放</option>
+          <option value="source">分析源码，直接调用 iframe 函数</option>
+          <option value="buttons">按按钮深度优先探索</option>
+        </select></label>
         <p id="estimate"></p>
         <button id="start">启动任务</button>
         <button type="button" class="secondary" id="stop" disabled>停止</button>
@@ -111,6 +112,12 @@
       </div>
       <progress id="progress" max="1" value="0"></progress>
       <p id="active">等待任务启动</p>
+      <p id="paths"></p>
+      <section id="manual" hidden aria-label="手动路径录入">
+        <h2 id="manualTitle"></h2>
+        <p id="manualNote" role="status"></p>
+        <div id="manualControls"></div>
+      </section>
       <details id="preview" open hidden>
         <summary>实时窗口预览</summary>
         <iframe id="screen" title="当前运行环境的实时画面" sandbox="allow-same-origin"
@@ -123,6 +130,7 @@
           <option value="bad">异常</option>
           <option value="action">探索动作</option>
           <option value="frame">iframe</option>
+          <option value="cacheDecision">缓存写入与跳过</option>
           <option value="cache">缓存命中</option>
         </select>
       </div>

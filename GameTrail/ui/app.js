@@ -56,15 +56,13 @@ function config() {
   return {
     template: $("template").value.trim(),
     variables,
+    primaryVariable: $("primaryVariable").value.trim(),
     selected: selected(),
     custom: JSON.parse($("custom").value || "[]"),
     explore: $("explore").checked,
-    labels: $("labels")
-      .value.split(/[,，]/)
-      .map((v) => v.trim())
-      .filter(Boolean),
+    exploreMode: $("exploreMode").value,
     ...Object.fromEntries(
-      ["waitSeconds", "actions", "extraGets"].map((k) => [
+      ["waitSeconds", "quietSeconds", "pixelTimeout", "pixelSimilarity", "actions"].map((k) => [
         k,
         Number($(k).value),
       ]),
@@ -76,7 +74,7 @@ async function estimate() {
   try {
     const { total } = await api("/api/plan", config());
     if (n === estimateId)
-      $("estimate").textContent = "预计运行 " + total + " 个环境";
+      $("estimate").textContent = "预计运行 " + total + " 次（含录入或发现阶段）";
   } catch (e) {
     if (n === estimateId) $("estimate").textContent = e.message;
   }
@@ -114,6 +112,7 @@ function render() {
             run: "环境",
             failed: "失败",
             request: "发送",
+            cacheDecision: "缓存",
           }[e.kind] ||
           e.kind,
       );
@@ -165,17 +164,26 @@ async function report(id) {
         " 次",
     ),
   );
+  for (const group of j.pathGroups || []) {
+    const detail = create("details");
+    detail.append(create("summary", (j.primaryVariable || "环境") + "=" + group.value + " · " + group.paths.length + " 条探索记录"));
+    for (const p of group.paths) {
+      const legacy = p.status ? (p.status === "valid" ? "有效 · " : "无效 · ") : "";
+      detail.append(create("div", legacy + p.steps.map(s => s.name).join(" → ")));
+    }
+    box.append(detail);
+  }
   for (const r of j.runs) {
     const p = create(
       "p",
       "#" +
         r.run +
         " " +
-        r.label +
+        [r.phase, r.label].filter(Boolean).join(" · ") +
         " · " +
         r.status +
         " · " +
-        (r.error || "探索点击 " + r.clicks + " / 子页面导航 " + r.frames),
+        (r.error || (r.replayedPaths === undefined ? "探索点击 " + r.clicks : "成功试播或重放 " + r.replayedPaths + " 条") + " / 子页面导航 " + r.frames),
     );
     if (r.screenshot) {
       const a = create("a", " 截图");
@@ -288,6 +296,41 @@ async function updatePreview(job) {
     previewBusy = false;
   }
 }
+let manualToken;
+function renderManual(job) {
+  const m = job?.manual;
+  $("manual").hidden = !m;
+  if (!m) { manualToken = null; return; }
+  $("manualTitle").textContent = job.paths.groupLabel + " · 手动录入";
+  $("manualNote").textContent = m.note || "可先在下方实时预览中观察游戏。点击“录入当前画面”接管当前游戏，也可跳过此游戏。";
+  if (manualToken === m.token) return;
+  manualToken = m.token;
+  const controls = $("manualControls");
+  controls.replaceChildren();
+  function button(label, action, index) {
+    const b = create("button", label);
+    b.onclick = async () => {
+      if (action === "record" || action === "reopen") {
+        const windowRef = window.open("/record.html#" + (m.session || m.token), "GameTrailRecorder", "popup,width=1060,height=760");
+        if (!windowRef) { show(Error("请允许本站打开录制窗口")); return; }
+        windowRef.focus();
+        if (action === "reopen") return;
+      }
+      for (const el of controls.children) el.disabled = true;
+      try { await api("/api/manual", {token:m.token, action, index}); }
+      catch (e) { manualToken = null; show(e); }
+    };
+    controls.append(b);
+  }
+  if (m.allowed.includes("record")) button("录入当前画面", "record");
+  if (m.session) button("打开录制窗口", "reopen");
+  if (m.allowed.includes("rerecord")) button("从入口重新录制", "rerecord");
+  if (m.allowed.includes("reset")) button("重新预览入口", "reset");
+  if (m.allowed.includes("trial")) m.paths.forEach((name,i) => button("从入口试播 · " + name, "trial", i));
+  if (m.allowed.includes("finish")) button("结束录制并验证", "finish");
+  if (m.allowed.includes("discard")) button("放弃这条路径", "discard");
+  if (m.allowed.includes("done")) button(m.paths.length ? "录入完毕，继续" : "跳过此游戏", "done");
+}
 async function poll() {
   try {
     const { job: j, cache: c } = await api("/api/state?after=" + seq);
@@ -303,6 +346,7 @@ async function poll() {
       $("cap").dataset.ready = "1";
     }
     updatePreview(j);
+    renderManual(j);
     if (j) {
       if (currentId !== j.id) {
         currentId = j.id;
@@ -320,6 +364,7 @@ async function poll() {
       $("errors").textContent = j.errors;
       $("hits").textContent = j.cacheHits;
       $("active").textContent = j.active || "本次运行已结束";
+      $("paths").textContent = j.paths ? j.paths.groupLabel + " · " + j.paths.phaseLabel + " · 已记录 " + j.paths.count + " 条路径" + (j.paths.activity ? " · " + j.paths.activity : "") : "";
       $("status").textContent = {
         running: "运行中",
         complete: "已完成",
@@ -353,14 +398,15 @@ async function init() {
   $("deleteReports").onclick = () => removeSelected().catch(show);
   presets = data.presets;
   const s = data.settings;
-  for (const k of ["template", "waitSeconds", "actions", "extraGets"])
-    $(k).value = s[k];
+  for (const k of ["template", "waitSeconds", "quietSeconds", "pixelTimeout", "pixelSimilarity", "actions"])
+    $(k).value = s[k] ?? (k === "quietSeconds" ? 1 : "");
   $("variables").value = Object.entries(s.variables)
     .map(([k, v]) => k + "=" + v.join(","))
     .join("\n");
-  $("labels").value = (s.labels || []).join(", ");
+  $("primaryVariable").value = s.primaryVariable ?? (s.template.includes("{gameId}") ? "gameId" : "");
   $("custom").value = JSON.stringify(s.custom, null, 2);
   $("explore").checked = s.explore;
+  $("exploreMode").value = s.exploreMode || "manual";
   devices(s.selected);
   $("custom").onchange = () => {
     try {
