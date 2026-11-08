@@ -331,9 +331,57 @@ function renderManual(job) {
   if (m.allowed.includes("discard")) button("放弃这条路径", "discard");
   if (m.allowed.includes("done")) button(m.paths.length ? "录入完毕，继续" : "跳过此游戏", "done");
 }
+let replayViewKey = "";
+const replayBoxes = () => [...$("replays").querySelectorAll("input:enabled")];
+function replaySelection() {
+  const boxes = replayBoxes(), count = boxes.filter(box => box.checked).length;
+  $("allReplays").checked = count > 0 && count === boxes.length;
+  $("allReplays").indeterminate = count > 0 && count < boxes.length;
+  $("deleteReplays").disabled = !count;
+}
+async function refreshReplays(job) {
+  const tasks = await api("/api/replays");
+  const checked = new Set(replayBoxes().filter(box => box.checked).map(box => box.value));
+  const list = $("replays");
+  list.replaceChildren();
+  $("replayTools").hidden = !tasks.length;
+  if (!tasks.length) list.textContent = "暂无已保存的重放任务";
+  for (const task of tasks) {
+    const row = create("div"), box = create("input");
+    row.className = "historyRow replayRow";
+    box.type = "checkbox";
+    box.value = task.id;
+    box.setAttribute("aria-label", "选择 " + task.name);
+    const running = job?.status === "running";
+    box.disabled = running && job.replayId === task.id;
+    box.checked = !box.disabled && checked.has(task.id);
+    const progress = task.rowIndex === task.total ? "已全部重放" :
+      "下次从环境 " + (task.rowIndex+1) + " / " + task.total + " 的路径 " + (task.pathIndex+1) + " 开始";
+    row.append(box, create("span", task.name + " · " + progress));
+    function button(label, disabled, action) {
+      const el = create("button", label);
+      el.className = "secondary";
+      el.disabled = disabled;
+      el.onclick = () => action().catch(show);
+      row.append(el);
+    }
+    for (const [mode,label] of [["continue","继续重放"],["all","全量重跑"]]) {
+      button(label, running || (mode === "continue" && task.rowIndex === task.total), async () => {
+        await api("/api/replays/start", {id:task.id, mode});
+        replayViewKey = "";
+      });
+    }
+    button("重命名", false, async () => {
+      const name = prompt("重放任务名称", task.name);
+      if (name !== null) await api("/api/replays/rename", {id:task.id, name});
+    });
+    list.append(row);
+  }
+  replaySelection();
+}
 async function poll() {
   try {
-    const { job: j, cache: c } = await api("/api/state?after=" + seq);
+    const { job: j, cache: c, replayRevision } = await api("/api/state?after=" + seq);
     $("usage").textContent =
       (c.bytes / 1048576).toFixed(1) +
       " MiB / " +
@@ -344,6 +392,11 @@ async function poll() {
     if (!$("cap").dataset.ready) {
       $("cap").value = c.cap / 1073741824;
       $("cap").dataset.ready = "1";
+    }
+    const key = replayRevision + "/" + (j?.status ?? "");
+    if (key !== replayViewKey) {
+      await refreshReplays(j);
+      replayViewKey = key;
     }
     updatePreview(j);
     renderManual(j);
@@ -396,6 +449,17 @@ async function init() {
     updateSelection();
   };
   $("deleteReports").onclick = () => removeSelected().catch(show);
+  $("replays").onchange = replaySelection;
+  $("allReplays").onchange = () => {
+    for (const box of replayBoxes()) box.checked = $("allReplays").checked;
+    replaySelection();
+  };
+  $("deleteReplays").onclick = async () => {
+    const ids = replayBoxes().filter(box => box.checked).map(box => box.value);
+    if (ids.length && confirm("删除所选的 " + ids.length + " 个重放任务？历史报告会保留。")) {
+      try { await api("/api/replays/delete", {ids}); } catch (e) { show(e); }
+    }
+  };
   presets = data.presets;
   const s = data.settings;
   for (const k of ["template", "waitSeconds", "quietSeconds", "pixelTimeout", "pixelSimilarity", "actions"])

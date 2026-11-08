@@ -47,15 +47,23 @@ const cache = new Cache(path.join(root, "cache"));
 let preview = null,
   current = null,
   ctrl = null;
-function start(cfg) {
+const {ReplayStore} = require("./replay-store");
+const replayStore = new ReplayStore(path.join(root, "replays.sqlite"));
+let replayRevision = 0;
+function start(cfg, saved, full = false) {
   delete cfg.labels;
   delete cfg.extraGets;
   if (current?.status === "running") throw Error("已有任务正在运行");
-  const rows = plan(cfg),
-    id = new Date().toISOString().replace(/[:.]/g, "-"),
+  const planned = plan(cfg);
+  const firstReplay = planned.findIndex(row => row.phase === "replay");
+  const startRow = saved && !full ? saved.rowIndex : 0;
+  const rows = saved ? planned.slice(firstReplay + startRow) : planned;
+  if (!rows.length) throw Error("已完成全部重放，可选择全量重跑");
+  const id = new Date().toISOString().replace(/[:.]/g, "-"),
     dir = path.join(reports, id);
   fs.mkdirSync(dir);
-  fs.writeFileSync(settings, JSON.stringify(cfg, null, 2));
+  if (!saved) fs.writeFileSync(settings, JSON.stringify(cfg, null, 2));
+  if (saved && full) replayStore.advance(saved.id, 0, 0);
   current = {
     id,
     status: "running",
@@ -72,7 +80,11 @@ function start(cfg) {
   ctrl = new AbortController();
   const job = current,
     signal = ctrl.signal,
-    groups = new Map();
+    groups = saved?.groups ?? new Map();
+  if (saved) {
+    job.replayId = saved.id;
+    replayRevision++;
+  }
   manualPrompt = new ManualPrompt(signal, view => { job.manual = view; });
   const record = (e) => {
     const event = { seq: ++job.seq, time: new Date(Date.now() + 8 * 3600000).toISOString().replace("Z", "+08:00"), ...e };
@@ -128,7 +140,24 @@ function start(cfg) {
       emit({ kind: "run", message: job.active });
       const isManual = cfg.explore && cfg.exploreMode === "manual";
       const execute = isManual ? runManual : runOne;
-      const extraArgs = isManual ? [manualPrompt] : [];
+      let checkpoint;
+      if (isManual && row.phase === "replay") {
+        if (!job.replayId) {
+          job.replayId = replayStore.create(cfg, groups, planned.length - firstReplay, row.url);
+          replayRevision++;
+        }
+        const index = saved ? startRow + i : i - firstReplay;
+        const advance = (rowIndex, pathIndex) => {
+          replayStore.advance(job.replayId, rowIndex, pathIndex);
+          replayRevision++;
+        };
+        checkpoint = {
+          pathIndex: saved && !full && i === 0 ? saved.pathIndex : 0,
+          advance: next => advance(index, next),
+          finish: () => advance(index + 1, 0),
+        };
+      }
+      const extraArgs = isManual ? [manualPrompt, checkpoint] : [];
       const capturePreview = capture => { preview = { jobId: id, run, capture }; };
       try {
         Object.assign(
@@ -137,11 +166,16 @@ function start(cfg) {
           { status: "完成" },
         );
       } catch (e) {
+        // runManual handles individual replay failures. A checkpoint failure
+        // must stop scheduling so the next attempt resumes at the saved path.
+        if (checkpoint && library.length && !signal.aborted) throw e;
         summary.status = signal.aborted ? "取消" : "失败";
         summary.error = e.message;
         emit({ kind: "warning", message: e.message.split("\n")[0] });
+      } finally {
+        preview = null;
       }
-      preview = null;
+      if (checkpoint && !signal.aborted) checkpoint.finish();
       summary.issues = issues;
       if (summary.status === "完成" && issues)
         summary.status = "完成（有异常）";
@@ -160,12 +194,14 @@ function start(cfg) {
       record({ kind: "warning", message: e.message });
     })
     .finally(() => {
+      if (job.replayId) replayRevision++;
       job.active = "";
       fs.writeFileSync(
         path.join(dir, "report.json"),
         JSON.stringify(
           {
             id,
+            replayId: job.replayId,
             status: job.status,
             total: job.total,
             done: job.done,
@@ -232,6 +268,17 @@ const server = http.createServer(async (req, res) => {
         return json({ error: "需要 JSON" }, 415);
       const data = await body(req);
       if (p === "/api/start") return json(start({ ...defaults, ...data }));
+      if (p === "/api/replays/start") {
+        if (!["all","continue"].includes(data.mode)) throw Error("重放方式无效");
+        const task = replayStore.load(data.id);
+        return json(start(task.config, task, data.mode === "all"));
+      }
+      if (p === "/api/replays/rename" || p === "/api/replays/delete") {
+        if (p.endsWith("/rename")) replayStore.rename(data.id, data.name);
+        else replayStore.remove(data.ids, current?.status === "running" ? current.replayId : null);
+        replayRevision++;
+        return json({ok:true});
+      }
       if (p === "/api/plan")
         return json({ total: plan({ ...defaults, ...data }).length });
       if (p === "/api/record-input") {
@@ -321,9 +368,11 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/state")
       return json({
+        replayRevision,
         job: state(Number(u.searchParams.get("after")) || 0),
         cache: cache.stats(),
       });
+    if (p === "/api/replays") return json(replayStore.list());
     if (p === "/api/history")
       return json(completedReports());
     let file, mt;

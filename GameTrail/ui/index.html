@@ -52,7 +52,7 @@
           ><label
             >框选步骤等待超时（秒）<input id="pixelTimeout" type="number" min="1" max="120" required /></label
           ><label
-            >截图最低相似度（%）<input id="pixelSimilarity" type="number" min="1" max="100" required /></label
+            >截图初始最低相似度（%，每 10 秒降 1 个百分点）<input id="pixelSimilarity" type="number" min="1" max="100" required /></label
           ><label
             >每环境最多尝试的函数数 / 按钮路径深度<input
               id="actions"
@@ -146,6 +146,12 @@
           <tbody id="events"></tbody>
         </table>
       </div>
+      <h2>已保存的重放任务</h2>
+      <div id="replayTools" hidden>
+        <label class="check"><input type="checkbox" id="allReplays" />全选</label>
+        <button id="deleteReplays" class="secondary" disabled>删除所选任务</button>
+      </div>
+      <div id="replays"></div>
       <h2>任务报告</h2>
       <div id="reportTools" hidden>
         <label class="check"><input type="checkbox" id="selectAll" />全选</label>

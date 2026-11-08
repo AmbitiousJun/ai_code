@@ -1,7 +1,7 @@
 const { randomUUID } = require("node:crypto");
 const { setTimeout: delay } = require("node:timers/promises");
 const { installManualActions } = require("./manual-actions");
-const { locatePixels } = require("./pixel-button");
+const { locatePixels, scanPixels } = require("./pixel-button");
 const { defaults } = require("./config");
 const { runOne } = require("./runner");
 
@@ -53,17 +53,31 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults) 
   const stop = watchFrames(page, lang, url => seen.add(url));
   try {
     for (const [i, step] of path.steps.entries()) {
-      const until = Date.now() + (step.pixels ? cfg.pixelTimeout ?? defaults.pixelTimeout : 15) * 1000;
+      const started = Date.now();
+      let threshold = cfg.pixelSimilarity ?? defaults.pixelSimilarity, previousCount;
+      const until = started + (step.pixels ? cfg.pixelTimeout ?? defaults.pixelTimeout : 15) * 1000;
       let ok = false;
       observed.paths.clear();
       while (!ok && Date.now() < until) {
         signal.throwIfAborted();
         if (step.pixels) {
           const timeout = Math.max(1, Math.min(3000, until - Date.now()));
-          const point = await locatePixels(page, step.pixels, cfg.pixelSimilarity, timeout)
+          const minimum = Math.max(1, (cfg.pixelSimilarity ?? defaults.pixelSimilarity) - Math.floor((Date.now() - started) / 10000));
+          const hits = await scanPixels(page, step.pixels, minimum, timeout)
             .catch(err => { if (err.name !== "TimeoutError") throw err; });
           signal.throwIfAborted();
-          if (point && Date.now() < until) {
+          if (Date.now() >= until) break;
+          if (hits) {
+            if (minimum < threshold) {
+              emit({kind:"action", message:"第 " + (i+1) + " 步截图最低相似度降至 " + minimum + "%"});
+              if (previousCount === 0 && hits.length > 2)
+                throw Error("第 " + (i+1) + " 步降低相似度后从 0 个变为至少 3 个目标，跳过路径 · " + step.name);
+            }
+            threshold = minimum;
+            previousCount = hits.length;
+          }
+          if (hits?.length === 1) {
+            const point = hits[0];
             await clickPoint(page, point, observed.hasTouch);
             ok = true;
             const similarity = (100 * (1 - point.score / 255)).toFixed(1);
@@ -134,7 +148,7 @@ class ManualPrompt {
   }
 }
 
-async function runManual(row, cfg, cache, signal, emit, library, shot, preview, prompt) {
+async function runManual(row, cfg, cache, signal, emit, library, shot, preview, prompt, checkpoint) {
   const lang = row.vars.lang;
   const urls = new Set();
   let frames = 0, replayedPaths = 0;
@@ -299,7 +313,8 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
       }
     }
   } else if (library.length) {
-    for (const [i,path] of library.entries()) {
+    for (let i = checkpoint?.pathIndex ?? 0; i < library.length; i++) {
+      const path = library[i];
       try {
         emit({kind:"action",message:"批量重放路径 " + (i+1)});
         await launch({install: ctx => ctx.addInitScript(installManualActions),
@@ -309,6 +324,8 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
         signal.throwIfAborted();
         emit({kind:"warning",message:"批量重放路径 " + (i+1) + " 失败 · " + err.message.split("\n")[0]});
       }
+      signal.throwIfAborted();
+      if (i + 1 < library.length) checkpoint?.advance(i + 1);
     }
   } else {
     await launch({ interact: async () => {} });

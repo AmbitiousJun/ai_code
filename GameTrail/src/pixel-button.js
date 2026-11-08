@@ -25,7 +25,7 @@ function prepare(template) {
   }
   return {rgb, anchors};
 }
-function match(image, template, similarity = 94) {
+function candidates(image, template, similarity = 94, uniqueOnly = false) {
   const {rgb, anchors} = prepare(template);
   const {width, height, data} = image;
   const scales = new Set([1,width/template.viewWidth,height/template.viewHeight,0.5,0.75,1.25,1.5,2]);
@@ -63,17 +63,26 @@ function match(image, template, similarity = 94) {
         Math.abs(a.y-hit.y)<Math.min(a.h,h)*0.4);
       if (index<0) hits.push(hit);
       else if (hit.score<hits[index].score) hits[index]=hit;
-      if (hits.length>100) return null;
+      if (hits.length > 100 || (uniqueOnly && hits.length >= 3)) return hits;
     }
   }
-  hits.sort((a,b)=>a.score-b.score);
-  if (!hits.length || (hits[1] && hits[1].score<hits[0].score+4)) return null;
+  return hits;
+}
+function match(image, template, similarity) {
+  const hits = candidates(image, template, similarity).sort((a,b)=>a.score-b.score);
+  if (hits.length > 100 || !hits.length || (hits[1] && hits[1].score<hits[0].score+4)) return null;
   return hits[0];
 }
-async function locatePixels(page, template, similarity, timeout = 3000) {
+async function screenshot(page, timeout) {
   const view = page.viewportSize();
   if (!view || view.width*view.height>8_500_000) throw Error("当前视口过大，无法进行像素匹配");
   const bytes = await page.screenshot({type:"png",scale:"css",timeout});
-  return match(PNG.sync.read(bytes),template,similarity);
+  return PNG.sync.read(bytes);
 }
-module.exports = { locatePixels, match };
+async function locatePixels(page, template, similarity, timeout = 3000) {
+  return match(await screenshot(page, timeout), template, similarity);
+}
+async function scanPixels(page, template, similarity, timeout) {
+  return candidates(await screenshot(page, timeout), template, similarity, true);
+}
+module.exports = { locatePixels, scanPixels, match };
