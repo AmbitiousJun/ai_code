@@ -46,7 +46,7 @@ function config() {
     .value.split("\n")
     .filter((x) => x.trim())) {
     const eq = line.indexOf("=");
-    if (eq < 1) throw Error("变量格式示例：lang=zh-CN,en-US");
+    if (eq < 1) throw Error("变量格式示例：gameId=demo-a,demo-b");
     variables[line.slice(0, eq).trim()] = line
       .slice(eq + 1)
       .split(/[,，]/)

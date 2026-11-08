@@ -10,8 +10,8 @@ const presets = [
 ].map(([id, name, model, engine]) => ({ id, name, engine, ...devices[model] }));
 const defaults = {
   template:
-    "https://jili-lobby.1b12.pro/games/enter?id={gameId}&lang={lang}&token=test",
-  variables: { gameId: ["573", "2", "403"], lang: ["zh-CN", "en-US"] },
+    "https://game.example.invalid/play/{gameId}?lang={lang}",
+  variables: { gameId: ["demo-a", "demo-b", "demo-c"], lang: ["en-US", "fr-FR"] },
   selected: ["win"],
   custom: [],
   explore: true,

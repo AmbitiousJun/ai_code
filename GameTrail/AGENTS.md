@@ -4,7 +4,7 @@
 
 macOS arm64 版本在 dist/GameTrail-0.6.3-macOS-arm64.zip。解压并双击 GameTrail.app，程序会在默认浏览器打开本地工作台。发行包自带 Node、Chromium、WebKit 和 Apple Vision 文字识别组件。右上角“退出程序”关闭服务；运行中先点“停止”。关闭工作台标签页后，可再次打开应用。
 
-1. 入口默认使用提供的 JILI 模板。变量按行填写，例如 gameId=573,2,403 和 lang=zh-CN,en-US。每种取值先做 URL 编码，然后按笛卡尔积组合。单任务的模板组合数和运行数均无固定上限。选择两个设备、按 gameId 隔离并开启探索时，共执行 3 次发现和 12 次回放。
+1. 默认入口为虚构模板 `https://game.example.invalid/play/{gameId}?lang={lang}`，启动前请换成实际入口。变量按行填写，例如 `gameId=demo-a,demo-b,demo-c` 和 `lang=en-US,fr-FR`。每种取值先做 URL 编码，然后按笛卡尔积组合。单任务的模板组合数和运行数均无固定上限。选择两个设备、按 gameId 隔离并开启探索时，共执行 3 次发现和 12 次回放。
 2. 勾选设备。内置 Windows Chrome、macOS Safari、iPhone 和 Android 的横竖屏预设。Safari 环境通过 WebKit 模拟。自定义配置在“自定义机型与探索参数”里填写，离开输入框后即可勾选。例如：
    
    ```json
@@ -106,18 +106,7 @@ macOS 默认数据目录为 ~/Library/Application Support/GameTrail，Windows �
 
 ## 历史版本本机验收（2026-11-07）
 
-在 macOS 13.5.2 arm64 上以发行包对应的 Chromium 执行三个 gameId、两种语言。每环境等待 60 秒、最多 8 次探索、20 个静态补抓候选。下表包含浏览器及补抓命中的不同 GET 200 URL；每行独立去重。站点返回和网络时序会影响重复测试结果。
-
-| gameId | lang | 不同 GET 200 URL | 实际点击 | 观察到的子 iframe 导航 |
-| --- | --- | ---: | ---: | ---: |
-| 573 | zh-CN | 376 | 1 | 0 |
-| 573 | en-US | 373 | 1 | 0 |
-| 2 | zh-CN | 294 | 1 | 0 |
-| 2 | en-US | 294 | 1 | 0 |
-| 403 | zh-CN | 270 | 1 | 0 |
-| 403 | en-US | 270 | 1 | 0 |
-
-六组均点击了教程中的“继续”或“Continue”。573 中文的结束截图停在 PLAY 标题页。样例中观察到 HTTP 400/404 以及页面脚本的 index out of range 异常；无法据此确定服务端原因，也未确认真实游戏内的活动 iframe 已覆盖。受控站点的浏览器回归测试则覆盖了点击后才出现的双层 iframe、语言 JSON、补抓、正文缓存复用和清理。
+受控站点的浏览器回归测试覆盖了点击后才出现的双层 iframe、语言 JSON、补抓、正文缓存复用和清理。
 
 打包验收从 dist 的 ZIP 解压后启动应用，使用本地工作台提交测试任务，核对了运行结束、GET 200 清单和 iframe 导航结果。
 
@@ -133,24 +122,19 @@ macOS 默认数据目录为 ~/Library/Application Support/GameTrail，Windows �
 
 五项回归测试通过，覆盖无 GET 的中间菜单、重复按钮达到深度上限、子 iframe 跨语言回放、慢速 GET 正文下载、Vision Canvas 双分支，以及 Chromium/WebKit 的浏览器原生请求和缓存。发行 ZIP 解压后通过签名校验；使用包内 Node、Chromium 和临时数据目录向本地工作台提交单组双语言任务，核对了一次发现、两次回放和持久化路径报告。
 
-
 ## 0.3.1 缓存重载验收
 
 从发行 ZIP 解压后通过签名校验，并使用包内 Node、Chromium 和 WebKit 加载受控站点。页面通过 fetch 读取分块传输的资源，再重新载入一次。Chromium 对带 max-age 的 MP3 和无有效期的 bundle.4dab3.zip 均只访问服务端一次，第二次在日志中显示 source=cache。无指纹且无有效期的 ZIP，以及带 no-store 的 PNG，均访问服务端两次。WebKit 在此用例中发送 no-cache，两次请求均访问服务端。
 
 ## 0.3.2 路径缓存验收
 
-从 dist ZIP 解压并通过签名校验，使用包内 Node 和 Chromium、独立临时数据目录，以项目测试入口加载 gameId=2、zh-CN，每次等待 45 秒。首次 291 个网络 GET 200 写入 280 个文件，共 25,942,953 字节。第二次使用新的浏览器会话，290 个 GET 200 中有 276 次命中、14 次回源，缓存仍为 280 个文件。以上为本次实测。受控测试还覆盖了 128 个资源在查询参数、Cookie 和来源页面变化后的复用。
+受控测试覆盖了 128 个资源在查询参数、Cookie 和来源页面变化后的复用。
 
 ## 0.4.0 源码探索验收
 
 11 项回归测试通过。受控页面在子 frame 的外部脚本中定义无参数活动入口，该入口通过同一对象上需要 URL 参数的方法加载活动 iframe。在 Chromium 和 WebKit 中均验证了零按钮点击、未导航候选排除、按语言重放以及活动地址随浏览器语言变化。发行 ZIP 解压后通过严格签名校验，包内 Node 确认版本为 0.4.0，默认探索模式为 source。
 
-项目样例 gameId=2、zh-CN 在 Chromium 上等待 60 秒后，最终版本观察到 233 个不同 GET URL，未找到可直接调用的 iframe 函数，未观察到子 frame 导航。此结果仅对应这次入口状态。
-
 ## 0.5.0 手动录入验收
-
-Chromium 访问样例 gameId=2、zh-CN。1280×720 下对教程右箭头执行真实鼠标点击，录到 Canvas / IntroView / AnimNode / Btn / Btn_Right 的 OnChangePage 绑定和 touch-end 参数类型。随后在 1000×640 全新浏览器上下文中从入口按绑定重放。两次操作前右箭头可用、左箭头隐藏，操作后右箭头隐藏、左箭头可用。此次真实站点验收覆盖教程翻页；活动 iframe 的出现和复现另由受控页面验证。
 
 12 项回归测试通过。手动模式用例覆盖先录完两组、放弃无绑定画布点击、保存两条不同路径、在子 frame 执行第二步、从全新会话试播、跳过另一组和跨尺寸批量运行。从 0.5.0 ZIP 解压后通过 codesign --verify --deep --strict；使用包内 Node 和 Chromium 从工作台提交本地任务，确认出现录入提示，跳过后仍加载入口，最终报告记录两个阶段和零条特殊路径。
 
