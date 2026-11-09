@@ -2,10 +2,12 @@
 
 ## 使用
 
-macOS arm64 版本在 dist/GameTrail-0.6.3-macOS-arm64.zip。解压并双击 GameTrail.app，程序会在默认浏览器打开本地工作台。发行包自带 Node、Chromium、WebKit 和 Apple Vision 文字识别组件。右上角“退出程序”关闭服务；运行中先点“停止”。关闭工作台标签页后，可再次打开应用。
+Windows x64 便携版为 dist/GameTrail.exe（0.6.4）。双击后启动器将内嵌的 Node、工作台与浏览器解压到本次启动专用的临时目录，正常退出时清理。设置、缓存、报告和已保存的重放任务继续使用原数据目录。发行时只需复制这个 EXE。
+
+上一版 macOS arm64 发行包名为 dist/GameTrail-0.6.3-macOS-arm64.zip。解压并双击 GameTrail.app，程序会在默认浏览器打开本地工作台。发行包自带 Node、Chromium、WebKit 和 Apple Vision 文字识别组件。右上角“退出程序”关闭服务；运行中先点“停止”。关闭工作台标签页后，可再次打开应用。
 
 1. 默认入口为虚构模板 `https://game.example.invalid/play/{gameId}?lang={lang}`，启动前请换成实际入口。变量按行填写，例如 `gameId=demo-a,demo-b,demo-c` 和 `lang=en-US,fr-FR`。每种取值先做 URL 编码，然后按笛卡尔积组合。单任务的模板组合数和运行数均无固定上限。选择两个设备、按 gameId 隔离并开启探索时，共执行 3 次发现和 12 次回放。
-2. 勾选设备。内置 Windows Chrome、macOS Safari、iPhone 和 Android 的横竖屏预设。Safari 环境通过 WebKit 模拟。自定义配置在“自定义机型与探索参数”里填写，离开输入框后即可勾选。例如：
+2. 勾选设备。内置 Windows Chrome、macOS Safari、iPhone 和 Android 的横竖屏预设。Safari 和 iPhone 预设在两种主机上均使用 WebKit。自定义配置在“自定义机型与探索参数”里填写，离开输入框后即可勾选。例如：
    
    ```json
    [{"id":"tablet","name":"平板横屏","engine":"chromium","viewport":{"width":1024,"height":768},"deviceScaleFactor":2,"isMobile":true,"hasTouch":true}]
@@ -64,6 +66,8 @@ source=network 表示浏览器观察到网络响应，cache 表示本机命中�
 
 | 位置 | 职责 |
 | --- | --- |
+| native/windows-webkit/ | Windows WebKit 的 LibreSSL 客户端 SNI 补丁、匹配的 x64 DLL 和许可证。scripts/install-browsers.js 核对原 DLL 哈希后安装补丁，打包时再次核对。 |
+| native/launcher-windows.cs、scripts/package-win.ps1 | Windows x64 便携启动器及构建脚本，将 Node、浏览器和服务打入单个 EXE。 |
 | native/launcher.swift、native/GameTrail.icns | macOS 后台应用入口和 Finder 图标。启动器运行 AppKit 事件循环，管理本地服务，重复打开应用可回到工作台。 |
 | src/server.js | 本机 HTTP 服务、单实例锁、任务生命周期、增量事件、报告读取和批量删除、缓存控制接口 |
 | src/config.js | 默认样例、设备和自定义配置、模板展开、主变量分组与发现/重放排序、参数范围及输入校验 |
@@ -97,7 +101,7 @@ npm run browsers
 npm start
 ```
 
-macOS 源码运行时可用 `swiftc -O native/vision.swift -o native/vision` 启用系统 OCR。Windows 在没有 Tesseract 时仍可运行 DOM 和 Cocos 识别。浏览器版本固定在与当前 Mac 的 macOS 13 兼容的 Playwright 1.48.2；变更版本时同时更新 lockfile、重新安装浏览器并运行两种引擎的回归测试。本次未在 Windows 主机验收。
+macOS 源码运行时可用 `swiftc -O native/vision.swift -o native/vision` 启用系统 OCR。Windows 在没有 Tesseract 时仍可运行 DOM 和 Cocos 识别。macOS 13 的浏览器和 Windows Chromium 固定使用 Playwright 1.48.2。Windows WebKit 由独立锁定的 webkit-win（playwright-core 1.65.0）启动，内嵌 WebKit 27.2（revision 2388）。升级时同步更新 lockfile，复核 TLS 补丁与浏览器 ABI，并运行两种引擎的回归测试。Windows x64 在安装项目依赖、执行 npm run browsers 后用 npm run package:win 打包。构建需要 Windows .NET Framework 4.x 的 x64 C# 编译器和 Node 24+ x64，可通过 GAMETRAIL_NODE 指定内嵌 Node。
 
 ```sh
 npm test
@@ -157,3 +161,10 @@ macOS 默认数据目录为 ~/Library/Application Support/GameTrail，Windows �
 ## 0.6.1 截图轮询与静音验收
 
 用发行包内的 Chromium 验证了两处相同图案会等待至超时，即使存在可调用的 DOM 绑定也不会误点。按钮延迟出现并移动到新位置后，回放在新位置点击。像素测试覆盖相似度阈值改变后的接受与拒绝。另核对了 Chromium 的静音启动参数，以及 WebKit 主页面和子 frame 内媒体元素的静音与 Web Audio 输出的连接、断开。安装到应用程序目录后通过严格签名校验，并使用独立数据目录验证了工作台版本、旧配置的默认值补全和自定义参数提交。
+
+## Windows WebKit 0.6.4
+
+Windows 上的 Safari 和 iPhone 预设通过 WebKit 自身执行 JavaScript、WebAssembly、渲染和网络请求。测试游戏的 HTTPS 登录和 WSS 实时连接共用一个含下划线的主机名。LibreSSL 4.3.3 默认在客户端生成 TLS SNI 前拒绝这种名字。补丁只在客户端校验时将下划线视为字母，发送原始主机名，证书信任链、证书主机名和浏览器跨域检查仍由原流程处理。
+
+native/windows-webkit/ssl-60.dll 从 OpenBSD 的 libressl-4.3.3.tar.gz 构建（SHA-256 为 ff97c432457f349e6ba3d416ab903bc7468f1436f0f32efe5fff808de292c7b8）。重建时在解压后的源码根目录执行 patch -p1，传入 native/windows-webkit/client-sni.patch，并在顶层 CMakeLists.txt 末尾追加 set_target_properties(crypto ssl PROPERTIES PREFIX "") 以匹配包内 DLL 名。用 MSYS2 UCRT64 GCC、CMake 3.31.6 和 Ninja 配置 Release 共享库，设置 BUILD_SHARED_LIBS=ON、LIBRESSL_TESTS=OFF、LIBRESSL_APPS=OFF、ENABLE_ASM=OFF，然后构建 ssl 目标。只取生成的 ssl/ssl-60.dll，配套使用浏览器自带的 crypto-57.dll。启动器内嵌的浏览器目录带有 LibreSSL-COPYING.txt。
+Windows x64 发行包验收使用单文件 EXE、独立数据目录、5 秒 GET 静默窗口，依次加载《海盗女王 2》的桌面 Safari 与 iPhone 竖屏环境。两个环境均到达“继续”画面，各记录 280 个去重 GET URL；第三方上报、排行榜等异常保留在报告。独立 WebKit 探针收到了游戏 WSS 数据帧，本地 TLS 用例验证原始下划线主机名进入 ClientHello，未受信任证书仍被拒绝。

@@ -1,6 +1,6 @@
 {
   "name": "gametrail",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "main": "src/server.js",
   "directories": {
     "test": "test"
@@ -9,6 +9,7 @@
     "test": "node --test test/*.test.js",
     "start": "node src/server.js",
     "browsers": "node scripts/install-browsers.js",
+    "package:win": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-win.ps1",
     "package:mac": "bash scripts/package-mac.sh"
   },
   "keywords": [],
@@ -16,7 +17,8 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "playwright": "1.48.2"
+    "playwright": "1.48.2",
+    "webkit-win": "npm:playwright-core@1.65.0"
   },
   "engines": {
     "node": ">=24"

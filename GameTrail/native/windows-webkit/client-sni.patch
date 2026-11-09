@@ -1,0 +1,30 @@
+--- a/ssl/s3_lib.c
++++ b/ssl/s3_lib.c
+@@ -1542,6 +1542,8 @@
+ _SSL_set_tlsext_host_name(SSL *s, const char *name)
+ {
+ 	int is_ip;
++	uint8_t check[TLSEXT_MAXLEN_host_name];
++	size_t i, len;
+ 	CBS cbs;
+ 
+ 	free(s->tlsext_hostname);
+@@ -1550,7 +1552,17 @@
+ 	if (name == NULL)
+ 		return 1;
+ 
+-	CBS_init(&cbs, name, strlen(name));
++	len = strlen(name);
++	if (len > sizeof(check)) {
++		SSLerror(s, SSL_R_SSL3_EXT_INVALID_SERVERNAME);
++		return 0;
++	}
++	/* Accept underscores in client SNI. Validate DNS label boundaries
++	 * with the existing parser and keep the original name on the wire.
++	 * Peer certificate verification is handled independently. */
++	for (i = 0; i < len; i++)
++		check[i] = name[i] == '_' ? 'a' : (uint8_t)name[i];
++	CBS_init(&cbs, check, len);
+ 
+ 	if (!tlsext_sni_is_valid_hostname(&cbs, &is_ip)) {
+ 		SSLerror(s, SSL_R_SSL3_EXT_INVALID_SERVERNAME);

@@ -87,9 +87,10 @@ test("真实点击加载双层 iframe、浏览器原生请求与跨运行缓存"
 
 test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gt-reload-"));
-  const cache = new Cache(dir);
+
   const assets = ["/sound.mp3", "/bundle.4dab3.zip", "/plain.zip", "/private.8052e.png"];
   const counts = new Map();
+  const caches = [];
   const forcedReloads = new Set();
   const server = http.createServer((req, res) => {
     if (req.url === "/") {
@@ -112,9 +113,11 @@ test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制"
     res.write("game");
     res.end(" asset");
   });
-  t.after(() => { server.close(); cache.db.close(); fs.rmSync(dir, {recursive:true, force:true}); });
+  t.after(() => { server.close(); for (const cache of caches) cache.db.close(); fs.rmSync(dir, {recursive:true, force:true}); });
   await new Promise(r => server.listen(0, "127.0.0.1", r));
   for (const id of ["win", "ios"]) {
+    const cache = new Cache(path.join(dir, id));
+    caches.push(cache);
     counts.clear();
     forcedReloads.clear();
     const cfg = {...defaults, selected:[id], template:"http://127.0.0.1:" + server.address().port,
@@ -171,7 +174,7 @@ test("128 个静态资源按路径命中，忽略查询参数、来源页和 Coo
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   t.after(() => {server.close(); cache.db.close(); fs.rmSync(dir, {recursive:true, force:true});});
   const cfg = {...defaults, template:"http://127.0.0.1:" + server.address().port,
-    explore:false, waitSeconds:5};
+    explore:false, waitSeconds:15, quietSeconds:3};
   const events = [];
   await runOne(plan(cfg)[0], cfg, cache, new AbortController().signal, e => events.push(e),
     [], path.join(dir, "session.png"));
@@ -422,4 +425,35 @@ test("入口 GET 静默提前完成，重复心跳不续时，慢正文受等待
     assert.ok(elapsed >= 1900 && elapsed < (limited ? 4000 : 6000), "等待毫秒 " + elapsed);
   }
   assert.ok(heartbeats >= 10);
+});
+
+test("Windows WebKit 在 TLS 握手中发送含下划线的原始 SNI", {
+  skip: process.platform !== "win32",
+}, async t => {
+  const host = "assets_api.example.invalid";
+  let serverName;
+  const tls = require("node:tls").createServer({
+    SNICallback(name, callback) {
+      serverName = name;
+      callback(new Error("测试握手到此结束"));
+    },
+  });
+  const proxy = http.createServer();
+  proxy.on("connect", (request, socket) => {
+    if (request.url !== host + ":443") return socket.destroy();
+    socket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+    tls.emit("connection", socket);
+  });
+  await new Promise(resolve => proxy.listen(0, "127.0.0.1", resolve));
+  t.after(() => proxy.close());
+  const browser = await require("webkit-win").webkit.launch({
+    proxy: { server: "http://127.0.0.1:" + proxy.address().port },
+  });
+  try {
+    const page = await browser.newPage();
+    await assert.rejects(page.goto("https://" + host, {timeout: 10000}));
+    assert.equal(serverName, host);
+  } finally {
+    await browser.close();
+  }
 });

@@ -32,6 +32,7 @@ function muteWebKit() {
     if (event.target instanceof HTMLMediaElement) muted.set.call(event.target, true);
   }, true);
 
+  if (typeof AudioNode === "undefined" || typeof AudioContext === "undefined") return;
   const originalConnect = AudioNode.prototype.connect;
   const sinks = new WeakMap();
   for (const method of ["connect", "disconnect"]) {
@@ -60,7 +61,9 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
   const opts = { headless: true };
   if (d.engine === "chromium" && !fs.existsSync(pw.chromium.executablePath()))
     opts.channel = "chrome";
-  const browser = await pw[d.engine].launch(opts);
+  const browserType = process.platform === "win32" && d.engine === "webkit"
+    ? require("webkit-win").webkit : pw[d.engine];
+  const browser = await browserType.launch(opts);
   const stop = () => browser.close().catch(() => {});
   signal.addEventListener("abort", stop, { once: true });
   try {

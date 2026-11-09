@@ -1,6 +1,8 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
+using System.Reflection;
 using System.Windows.Forms;
 
 internal static class Launcher
@@ -8,9 +10,15 @@ internal static class Launcher
     [STAThread]
     private static int Main()
     {
+        string runtime = Path.Combine(Path.GetTempPath(), "GameTrail-" + Guid.NewGuid().ToString("N"));
         try
         {
-            string runtime = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "runtime");
+            Directory.CreateDirectory(runtime);
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("runtime.zip"))
+            using (var archive = new ZipArchive(stream, ZipArchiveMode.Read))
+            {
+                archive.ExtractToDirectory(runtime);
+            }
             var start = new ProcessStartInfo(Path.Combine(runtime, "node.exe"), "src/server.js")
             {
                 WorkingDirectory = runtime,
@@ -33,6 +41,12 @@ internal static class Launcher
         {
             MessageBox.Show(error.Message, "GameTrail", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
+        }
+        finally
+        {
+            try { Directory.Delete(runtime, true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 }
