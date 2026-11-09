@@ -2,7 +2,7 @@
 
 ## 使用
 
-Windows x64 便携版为 dist/GameTrail.exe（0.6.4）。双击后启动器将内嵌的 Node、工作台与浏览器解压到本次启动专用的临时目录，正常退出时清理。设置、缓存、报告和已保存的重放任务继续使用原数据目录。发行时只需复制这个 EXE。
+Windows x64 便携版为 dist/GameTrail.exe（0.6.6）。双击后启动器将内嵌的 Node、工作台与浏览器解压到本次启动专用的临时目录，正常退出时清理。设置、缓存、报告和已保存的重放任务继续使用原数据目录。发行时只需复制这个 EXE。
 
 上一版 macOS arm64 发行包名为 dist/GameTrail-0.6.3-macOS-arm64.zip。解压并双击 GameTrail.app，程序会在默认浏览器打开本地工作台。发行包自带 Node、Chromium、WebKit 和 Apple Vision 文字识别组件。右上角“退出程序”关闭服务；运行中先点“停止”。关闭工作台标签页后，可再次打开应用。
 
@@ -36,7 +36,7 @@ Windows x64 便携版为 dist/GameTrail.exe（0.6.4）。双击后启动器将�
 
 本机网页工作台通过 HTTP JSON 调用 Node 服务。服务只绑定 127.0.0.1，默认选用空闲端口。UI 每 600 毫秒按事件序号增量读取最近的请求；完整事件逐行写入任务目录。预览展开且工作台可见时，前端独立请求 /api/preview，按任务和运行序号获取当前环境最新打开页面的 JPEG 截图。iframe 只展示正在运行的浏览器截图，不会发起第二次游戏导航。截图仅在内存中传递，同一环境并发请求共用一次截图。服务一次执行一个任务，SQLite 写锁使同一数据目录只有一个服务实例。
 
-任务调度器将模板组合与设备预设展开为运行列表。每个运行启动静音的无头浏览器（Chromium 使用启动参数，WebKit 在每个 frame 初始化时静音媒体元素与 Web Audio 输出），在导航前注册上下文级请求/响应、失败和子 frame 导航监听。页面正常发出的 POST 会保留原方法。浏览器实际访问的第三方资源同样记入报告。游戏自己的动态 JS、嵌套 frame 和接口由浏览器执行。Service Worker 默认禁用以保证请求可观察，因此依赖其离线逻辑的站点可能表现不同。
+任务调度器将模板组合与设备预设展开为运行列表。每个运行启动静音的无头浏览器（Chromium 显式使用 --mute-audio 启动，WebKit 在每个 frame 初始化时静音 Web Audio 输出，并在媒体加载、播放和音量变化时保持静音；Windows 版另在导航前启动音频助手，每 100 毫秒检查输出设备，将当前服务所属 WebKit 进程新建的 Windows 音频会话设为静音，随浏览器退出），在导航前注册上下文级请求/响应、失败和子 frame 导航监听。页面正常发出的 POST 会保留原方法。浏览器实际访问的第三方资源同样记入报告。游戏自己的动态 JS、嵌套 frame 和接口由浏览器执行。Service Worker 默认禁用以保证请求可观察，因此依赖其离线逻辑的站点可能表现不同。
 
 主隔离变量取自入口模板，含 `{gameId}` 的模板默认使用 gameId。自动源码或按钮模式下，每个值先在其他变量的首组取值与首个所选设备上发现路径，然后在该值的全部组合（含首个环境）上重放，之后才切换到下一组。主隔离变量留空时各环境独立探索。探索库按任务保存，report.json 的 pathGroups 记录各组走到深度上限或无按钮可点的完整路径，每步含标签页、frame 路径、定位信息及 frame 内的 CSS 像素坐标。工作台显示当前分组、阶段、在试路径及已记录路径数，可在历史报告中展开路径。
 
@@ -66,7 +66,7 @@ source=network 表示浏览器观察到网络响应，cache 表示本机命中�
 
 | 位置 | 职责 |
 | --- | --- |
-| native/windows-webkit/ | Windows WebKit 的 LibreSSL 客户端 SNI 补丁、匹配的 x64 DLL 和许可证。scripts/install-browsers.js 核对原 DLL 哈希后安装补丁，打包时再次核对。 |
+| native/windows-webkit/ | Windows WebKit 的音频会话静音助手 audio-mute.cpp 和 x64 可执行文件（编译命令见源文件首行），以及 LibreSSL 客户端 SNI 补丁、匹配的 x64 DLL 和许可证。scripts/install-browsers.js 核对原 DLL 哈希后安装补丁，打包时再次核对。 |
 | native/launcher-windows.cs、scripts/package-win.ps1 | Windows x64 便携启动器及构建脚本，将 Node、浏览器和服务打入单个 EXE。 |
 | native/launcher.swift、native/GameTrail.icns | macOS 后台应用入口和 Finder 图标。启动器运行 AppKit 事件循环，管理本地服务，重复打开应用可回到工作台。 |
 | src/server.js | 本机 HTTP 服务、单实例锁、任务生命周期、增量事件、报告读取和批量删除、缓存控制接口 |
@@ -168,3 +168,7 @@ Windows 上的 Safari 和 iPhone 预设通过 WebKit 自身执行 JavaScript、W
 
 native/windows-webkit/ssl-60.dll 从 OpenBSD 的 libressl-4.3.3.tar.gz 构建（SHA-256 为 ff97c432457f349e6ba3d416ab903bc7468f1436f0f32efe5fff808de292c7b8）。重建时在解压后的源码根目录执行 patch -p1，传入 native/windows-webkit/client-sni.patch，并在顶层 CMakeLists.txt 末尾追加 set_target_properties(crypto ssl PROPERTIES PREFIX "") 以匹配包内 DLL 名。用 MSYS2 UCRT64 GCC、CMake 3.31.6 和 Ninja 配置 Release 共享库，设置 BUILD_SHARED_LIBS=ON、LIBRESSL_TESTS=OFF、LIBRESSL_APPS=OFF、ENABLE_ASM=OFF，然后构建 ssl 目标。只取生成的 ssl/ssl-60.dll，配套使用浏览器自带的 crypto-57.dll。启动器内嵌的浏览器目录带有 LibreSSL-COPYING.txt。
 Windows x64 发行包验收使用单文件 EXE、独立数据目录、5 秒 GET 静默窗口，依次加载《海盗女王 2》的桌面 Safari 与 iPhone 竖屏环境。两个环境均到达“继续”画面，各记录 280 个去重 GET URL；第三方上报、排行榜等异常保留在报告。独立 WebKit 探针收到了游戏 WSS 数据帧，本地 TLS 用例验证原始下划线主机名进入 ClientHello，未受信任证书仍被拒绝。
+
+## Windows WebKit 0.6.6 静音验收
+
+从单文件 EXE 启动工作台后，用包内 Node、WebKit 和静音助手运行 iPhone 预设。点击本地测试页的按钮循环播放 WAV，确认播放时间持续推进，另用 Windows Core Audio 按进程 ID 读取对应 WebKitWebProcess 的音频会话，验证系统静音标志为 1。

@@ -8,6 +8,42 @@ const { runOne } = require("../src/runner"),
   { Cache } = require("../src/cache"),
   { defaults: appDefaults, plan } = require("../src/config");
 const defaults = { ...appDefaults, exploreMode: "buttons" };
+test("浏览器初始化时静音 Chromium 和 WebKit 子 frame", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gt-mute-"));
+  const cache = new Cache(dir);
+  const server = http.createServer((req, res) => {
+    res.setHeader("Content-Type", "text/html");
+    res.end(req.url === "/" ? '<iframe src="/frame"></iframe>' : "<audio></audio>");
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => {
+    server.close();
+    cache.db.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  for (const id of ["win", "ios"]) {
+    const cfg = { ...defaults, explore: false, selected: [id], waitSeconds: 2,
+      template: "http://127.0.0.1:" + server.address().port + "/" };
+    await runOne(plan(cfg)[0], cfg, cache, new AbortController().signal, () => {},
+      [], path.join(dir, id + ".png"), null, { async interact(page) {
+        if (id === "win") {
+          const session = await page.context().newCDPSession(page);
+          const command = await session.send("Browser.getBrowserCommandLine");
+          assert.ok(command.arguments.includes("--mute-audio"));
+        } else {
+          const audio = page.frameLocator("iframe").locator("audio");
+          assert.equal(await audio.evaluate(element => {
+            element.dispatchEvent(new Event("loadstart"));
+            return element.muted;
+          }), true);
+          assert.equal(await audio.evaluate(element => {
+            element.muted = false;
+            return element.muted;
+          }), true);
+        }
+      } });
+  }
+});
 test("真实点击加载双层 iframe、浏览器原生请求与跨运行缓存", async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gt-browse-")),
     cache = new Cache(dir);

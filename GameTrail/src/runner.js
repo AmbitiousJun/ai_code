@@ -28,9 +28,13 @@ function muteWebKit() {
     muted.set.call(this, true);
     return play.apply(this, args);
   };
-  document.addEventListener("play", event => {
-    if (event.target instanceof HTMLMediaElement) muted.set.call(event.target, true);
-  }, true);
+  function silenceMedia(event) {
+    const element = event.target;
+    if (element instanceof HTMLMediaElement && !muted.get.call(element))
+      muted.set.call(element, true);
+  }
+  for (const event of ["loadstart", "play", "volumechange"])
+    document.addEventListener(event, silenceMedia, true);
 
   if (typeof AudioNode === "undefined" || typeof AudioContext === "undefined") return;
   const originalConnect = AudioNode.prototype.connect;
@@ -59,15 +63,29 @@ function muteWebKit() {
 async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewReady, manual) {
   const { device: d } = row;
   const opts = { headless: true };
-  if (d.engine === "chromium" && !fs.existsSync(pw.chromium.executablePath()))
-    opts.channel = "chrome";
+  if (d.engine === "chromium") {
+    opts.args = ["--mute-audio"];
+    if (!fs.existsSync(pw.chromium.executablePath())) opts.channel = "chrome";
+  }
   const browserType = process.platform === "win32" && d.engine === "webkit"
     ? require("webkit-win").webkit : pw[d.engine];
   const browser = await browserType.launch(opts);
   const stop = () => browser.close().catch(() => {});
   signal.addEventListener("abort", stop, { once: true });
+  let audioGuard;
   try {
     signal.throwIfAborted();
+    if (process.platform === "win32" && d.engine === "webkit") {
+      const executable = path.resolve(__dirname, "../native/windows-webkit/audio-mute.exe");
+      audioGuard = require("node:child_process").spawn(executable,
+        [String(process.pid), path.dirname(browserType.executablePath())],
+        { windowsHide: true, stdio: "ignore" });
+      await require("node:events").once(audioGuard, "spawn");
+      audioGuard.once("exit", (code) => {
+        if (audioGuard && !signal.aborted)
+          emit({ kind: "warning", message: "Windows 音频静音进程意外退出 · " + code });
+      });
+    }
     const { id, name, engine, defaultBrowserType, ...device } = d;
     const locale = row.vars.lang || d.locale || "en-US";
     const ctx = await browser.newContext({
@@ -76,7 +94,6 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
       serviceWorkers: "block",
     });
     if (engine === "webkit") await ctx.addInitScript(muteWebKit);
-    // Headless Chromium includes --mute-audio in Playwright's launch arguments.
     const observed = { quietMs: (cfg.quietSeconds ?? 1) * 1000, hasTouch: !!d.hasTouch, active: new Set(), paths: new Set(), lastGET: 0, frames: 0, entry: row.url },
       seen = new Set(),
       pending = new Set(),
@@ -241,6 +258,8 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
   } finally {
     signal.removeEventListener("abort", stop);
     await browser.close().catch(() => {});
+    audioGuard?.kill();
+    audioGuard = null;
   }
 }
 module.exports = { runOne };

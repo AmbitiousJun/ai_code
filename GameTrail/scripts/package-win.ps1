@@ -12,6 +12,8 @@ $stage = Join-Path $build 'payload'
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 try {
     Copy-Item -LiteralPath $node -Destination (Join-Path $stage 'node.exe')
+    $audioDir = New-Item -ItemType Directory -Path (Join-Path $stage 'native/windows-webkit') -Force
+    Copy-Item -LiteralPath 'native/windows-webkit/audio-mute.exe' -Destination $audioDir.FullName
     foreach ($item in 'src','ui','package.json','package-lock.json','node_modules') {
         Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force
     }
