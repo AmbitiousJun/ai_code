@@ -152,3 +152,72 @@ test("框选动作等待唯一图案，超时跳过，出现后点击当前位�
     assert.ok(events.some(e=>e.message.includes("像素图")));
   } finally {await browser.close();}
 });
+test("无绑定 Cocos 触摸节点在子 frame 移位后以真实触屏操作重放", async () => {
+  const {installManualActions} = require("../src/manual-actions");
+  const {replay} = require("../src/manual");
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({hasTouch:true,viewport:{width:640,height:480}});
+    const steps=[];
+    await page.exposeBinding("__gtReport",(_,s)=>{ steps.push(s); });
+    async function scene(left) {
+      await page.setContent('<iframe name="game" style="position:absolute;left:72px;top:31px;width:320px;height:220px"></iframe>');
+      const frame=page.frame({name:"game"});
+      await frame.setContent('<style>*{margin:0}</style><canvas width="300" height="200"></canvas>');
+      await frame.evaluate(left=>{
+        const canvas=document.querySelector("canvas");
+        class Node {
+          dispatchEvent(event) { if (event.type==="touchend" && event.trusted) window.taps++; }
+        }
+        const target=Object.assign(new Node(),{name:"奖励",activeInHierarchy:true,
+          getBoundingBoxToWorld:()=>({x:left,y:80,width:40,height:40})});
+        const root={children:[target]};
+        target.parent=root;
+        window.cc={Node,game:{canvas},director:{getScene:()=>root},v2:(x,y)=>({x,y}),
+          view:{getScaleX:()=>1,getScaleY:()=>1,getViewportRect:()=>({x:0,y:0,width:300,height:200})}};
+        window.taps=0;
+        canvas.addEventListener("touchend",e=>{
+          const t=e.changedTouches[0], r=canvas.getBoundingClientRect();
+          if (t.clientX-r.x>=left && t.clientX-r.x<=left+40 && Math.abs(t.clientY-r.y-100)<20)
+            target.dispatchEvent({type:"touchend",trusted:e.isTrusted});
+        });
+      },left);
+      await frame.evaluate(installManualActions);
+      return frame;
+    }
+    let frame=await scene(44);
+    await frame.locator("canvas").tap({position:{x:55,y:96}});
+    await page.waitForTimeout(250);
+    assert.equal(steps.length,1);
+    assert.equal(steps[0].kind,"CocosTouch");
+    frame=await scene(201);
+    await replay(page,{steps:[{...steps[0],route:[{name:"game"}]}],frames:[]},new AbortController().signal,
+      ()=>{}, {active:new Set(),paths:new Set(),lastGET:0,quietMs:0,hasTouch:true},"");
+    assert.equal(await frame.evaluate(()=>window.taps),1);
+  } finally { await browser.close(); }
+});
+
+test("无损选区匹配同一视口中移动、非预设缩放和亮度变化的按钮，标记重复目标", async () => {
+  const {scan} = require("../src/visual-match");
+  const size=32, rgb=Buffer.alloc(size*size*3);
+  for (let y=0;y<size;y++) for (let x=0;x<size;x++) {
+    const i=3*(size*y+x);
+    rgb[i]=x<8 || y>20 ? 195:30;
+    rgb[i+1]=x+y>31 ? 159:32;
+    rgb[i+2]=y<6 ? 170:75;
+  }
+  const template={side:size,width:80,height:80,viewWidth:360,viewHeight:180,rgb:rgb.toString("base64")};
+  const image={width:360,height:180,data:Buffer.alloc(360*180*4)};
+  function draw(left) {
+    for(let y=0;y<69;y++) for(let x=0;x<69;x++) {
+      const i=3*(Math.floor(y*size/69)*size+Math.floor(x*size/69));
+      for(let c=0;c<3;c++) image.data[4*((40+y)*360+x+left)+c]=rgb[i+c]+8;
+    }
+  }
+  draw(177);
+  const found=scan(image,template,94);
+  assert.equal(found.hits.length,1);
+  assert.ok(Math.abs(found.best.x-211.5)<4);
+  draw(32);
+  assert.equal(scan(image,template,94).hits.length,2);
+});

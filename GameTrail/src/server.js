@@ -127,6 +127,7 @@ function start(cfg, saved, full = false) {
           job.paths.count = library.length;
           job.paths.activity = e.message;
         }
+        if (e.diagnostic) (summary.diagnostics ||= []).push({message:e.message,file:e.diagnostic});
         record({ run, ...e });
       };
       const summary = {
@@ -294,8 +295,8 @@ const server = http.createServer(async (req, res) => {
         manualPrompt.inputBusy = true;
         try {
           if (data.mode === "pixels") {
-            const {rgb,width,height,viewWidth,viewHeight} = data.template;
-            await manualPrompt.recordPixels({rgb,width,height,viewWidth,viewHeight});
+            const {rgb,width,height,viewWidth,viewHeight,side,left,top,detail} = data.template;
+            await manualPrompt.recordPixels({rgb,width,height,viewWidth,viewHeight,side,left,top,detail});
             return json({ok:true});
           }
           const size = page.viewportSize();
@@ -338,6 +339,16 @@ const server = http.createServer(async (req, res) => {
         return json(cache.stats());
       }
     }
+    if (req.method === "GET" && p === "/api/record-freeze") {
+      const prompt = manualPrompt;
+      const page = prompt?.recordPage;
+      if (!page || !prompt.view?.session || prompt.view.token !== u.searchParams.get("token"))
+        return json({error:"录制已结束"}, 409);
+      const image = await page.screenshot({type:"png", scale:"css", timeout:3000});
+      if (prompt.recordPage !== page) return json({error:"录制已结束"}, 409);
+      res.writeHead(200, {"Content-Type":"image/png","Cache-Control":"no-store"});
+      return res.end(image);
+    }
     if (p === "/api/record-state") {
       const view = manualPrompt?.view;
       return json(view?.session && view.session === u.searchParams.get("session")
@@ -377,10 +388,10 @@ const server = http.createServer(async (req, res) => {
       return json(completedReports());
     let file, mt;
     if (
-      /^\/reports\/[\dTZ-]+\/(report\.json|events\.ndjson|\d+\.png)$/.test(p)
+      /^\/reports\/[\dTZ-]+\/(report\.json|events\.ndjson|\d+\.png|match-[0-9a-f-]{36}\.svg)$/.test(p)
     ) {
       file = path.join(root, p);
-      mt = p.endsWith(".png")
+      mt = p.endsWith(".svg") ? "image/svg+xml" : p.endsWith(".png")
         ? "image/png"
         : p.endsWith(".json")
           ? "application/json"

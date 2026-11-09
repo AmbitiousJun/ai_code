@@ -52,11 +52,10 @@ function installManualActions() {
         const original = h.emit;
         h.emit = function(args) {
           if (!gesture || dispatching) return original.apply(this, arguments);
-          cocosAction = true;
           const path = pathOf(node), key = bindingId(h);
           if (!path || !h.handler || !h.target || !pathOf(h.target) ||
               bindings(node).filter(other => bindingId(other) === key).length !== 1)
-            report({ error: "Cocos 按钮或组件绑定无法唯一定位" });
+            bindingError = "Cocos 按钮或组件绑定无法唯一定位";
           else {
             const types = Array.isArray(args) ? args.map(arg => {
               if (arg?.node === node) return { kind: "component", type: className(arg) };
@@ -64,8 +63,11 @@ function installManualActions() {
               if (arg == null || ["string","number","boolean"].includes(typeof arg)) return { kind: "value", value: arg };
               return null;
             }) : [];
-            if (types.includes(null)) report({ error: "Cocos 监听器参数无法重建" });
-            else report({ kind: "CocosBinding", name: h.handler, path, key, args: types });
+            if (types.includes(null)) bindingError = "Cocos 监听器参数无法重建";
+            else {
+              cocosAction = true;
+              report({ kind: "CocosBinding", name: h.handler, path, key, args: types });
+            }
           }
           dispatching = true;
           try { return original.apply(this, arguments); }
@@ -75,12 +77,61 @@ function installManualActions() {
       }
     });
   }
+  let touchStep, ambiguousTouch, bindingError;
+  function targetBox(node, canvas) {
+    const cc = window.cc, view = cc?.view;
+    if (!canvas || !node?.activeInHierarchy || node.opacity === 0 || view?._isRotated) return;
+    const vp = view?.getViewportRect?.(), box = node.getBoundingBoxToWorld?.();
+    if (!vp || !box || !canvas.width || !canvas.height) return;
+    const camera = cc.Camera?.findCamera?.(node);
+    function project(x,y) {
+      let p = cc.v2(x,y);
+      if (camera?.getWorldToScreenPoint) p = camera.getWorldToScreenPoint(p);
+      return {x:(p.x*view.getScaleX()+vp.x)/canvas.width,
+        y:1-(p.y*view.getScaleY()+vp.y)/canvas.height};
+    }
+    const a = project(box.x, box.y+box.height), b = project(box.x+box.width, box.y);
+    const width = b.x-a.x, height = b.y-a.y;
+    if (width > 0 && height > 0 && width*height < 0.8) return {...a,width,height};
+  }
+  function canvasForGame() { return window.cc?.game?.canvas || document.querySelector("#GameCanvas,canvas"); }
+  function armTouch(e) {
+    const proto = window.cc?.Node?.prototype, canvas = canvasForGame();
+    if (!proto || e.target !== canvas || typeof proto.dispatchEvent !== "function") return;
+    const r = canvas.getBoundingClientRect();
+    const pointer = {x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+    // Wrap only for this gesture. Capture before game handlers can move or destroy the node.
+    const original = proto.dispatchEvent;
+    const dispatch = function(event) {
+      if (gesture && /^(touch(start|end)|mouse(down|up))$/i.test(event?.type)) {
+        try {
+          const path = pathOf(this), box = targetBox(this,canvas);
+          if (box && path?.length) {
+            const x = (pointer.x-box.x)/box.width, y = (pointer.y-box.y)/box.height;
+            if (x>=0 && x<=1 && y>=0 && y<=1) {
+              if (touchStep && JSON.stringify(path)!==JSON.stringify(touchStep.path)) ambiguousTouch=true;
+              touchStep = {kind:"CocosTouch",name:this.name,path,x,y};
+            }
+          }
+        } catch { /* Unknown engine projection: preserve normal input. */ }
+      }
+      return original.apply(this,arguments);
+    };
+    proto.dispatchEvent = dispatch;
+    restoreDispatch = () => { if (proto.dispatchEvent === dispatch) proto.dispatchEvent = original; };
+  }
+  let restoreDispatch;
   function start(e) {
     if (!e.isTrusted || !window.__gtReport) return;
     finishGesture?.();
     clearTimeout(timer);
     gesture = true;
     cocosAction = false;
+    restoreDispatch?.();
+    bindingError = undefined;
+    touchStep = undefined;
+    ambiguousTouch = false;
+    armTouch(e);
     arm();
   }
   function end(e) {
@@ -89,7 +140,8 @@ function installManualActions() {
     finishGesture = () => {
       finishGesture = undefined;
       if (!cocosAction && e.target instanceof HTMLCanvasElement)
-        report({ error: "画布操作没有可重新定位的 Cocos 按钮绑定" });
+        report(touchStep && !ambiguousTouch ? touchStep : { error: bindingError || "画布操作没有可重新定位的 Cocos 按钮绑定或触摸节点" });
+      restoreDispatch?.();
       gesture = false;
     };
     timer = setTimeout(finishGesture, 160);
@@ -129,7 +181,7 @@ function installManualActions() {
       el.click();
       return true;
     }
-    if (step.kind !== "CocosBinding") return false;
+    if (!["CocosTouch","CocosBinding"].includes(step.kind)) return false;
     let node = scene();
     for (const part of step.path) {
       const matches = node?.children?.filter(c => c.name === part);
@@ -137,6 +189,14 @@ function installManualActions() {
       node = matches[0];
     }
     if (!node?.activeInHierarchy) return false;
+    if (step.kind === "CocosTouch") {
+      const canvas = canvasForGame(), box = targetBox(node,canvas);
+      if (!box) return false;
+      const r = canvas.getBoundingClientRect();
+      const x = (box.x+box.width*step.x)*r.width, y = (box.y+box.height*step.y)*r.height;
+      if (document.elementFromPoint(r.left+x,r.top+y) !== canvas) return false;
+      return {index:Array.from(document.querySelectorAll("canvas")).indexOf(canvas),x,y};
+    }
     const matches = bindings(node).filter(h => bindingId(h) === step.key);
     if (matches.length !== 1) return false;
     const h = matches[0];

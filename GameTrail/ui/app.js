@@ -132,6 +132,9 @@ function render() {
           (e.message || ""),
       ),
     );
+    if (e.diagnostic) {
+      const a = create("a"," 查看诊断图"); a.href = "/reports/"+currentId+"/"+e.diagnostic; a.target = "_blank"; tr.lastElementChild.append(a);
+    }
     fragment.append(tr);
   }
   $("events").replaceChildren(fragment);
@@ -190,6 +193,9 @@ async function report(id) {
       a.href = root + r.screenshot;
       a.target = "_blank";
       p.append(a);
+    }
+    for (const d of r.diagnostics || []) {
+      const a = create("a"," 匹配诊断图"); a.href = root+d.file; a.target = "_blank"; a.title = d.message; p.append(a);
     }
     box.append(p);
   }

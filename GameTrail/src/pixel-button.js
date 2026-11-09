@@ -79,10 +79,32 @@ async function screenshot(page, timeout) {
   const bytes = await page.screenshot({type:"png",scale:"css",timeout});
   return PNG.sync.read(bytes);
 }
+async function gameArea(canvas) {
+  const bounds = await canvas.boundingBox({timeout:500});
+  if (!bounds) return;
+  const vp = await canvas.evaluate(el => {
+    const cc = window.cc;
+    if (cc?.game?.canvas !== el || cc.view?._isRotated) return;
+    const v = cc.view?.getViewportRect?.();
+    if (v && el.width && el.height)
+      return {x:v.x/el.width,y:1-(v.y+v.height)/el.height,w:v.width/el.width,h:v.height/el.height};
+  },undefined,{timeout:500});
+  if (!vp) return bounds;
+  const left=Math.max(0,vp.x), top=Math.max(0,vp.y);
+  return {x:bounds.x+left*bounds.width,y:bounds.y+top*bounds.height,
+    width:bounds.width*(Math.min(1,vp.x+vp.w)-left),height:bounds.height*(Math.min(1,vp.y+vp.h)-top)};
+}
 async function locatePixels(page, template, similarity, timeout = 3000) {
+  if (template.side === 32) {
+    const {hits} = await scanPixels(page,template,similarity,timeout);
+    return hits.length===1 ? hits[0] : null;
+  }
   return match(await screenshot(page, timeout), template, similarity);
 }
-async function scanPixels(page, template, similarity, timeout) {
-  return candidates(await screenshot(page, timeout), template, similarity, true);
+async function scanPixels(page, template, similarity, timeout, gameScale) {
+  const image = await screenshot(page, timeout);
+  if (template.side === 32) return {...require("./visual-match").scan(image,template,similarity,gameScale),image};
+  const hits = candidates(image, template, similarity, true);
+  return {hits,image,best:hits.slice().sort((a,b)=>a.score-b.score)[0]};
 }
-module.exports = { locatePixels, scanPixels, match };
+module.exports = { locatePixels, scanPixels, match, gameArea };
