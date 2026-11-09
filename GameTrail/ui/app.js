@@ -40,6 +40,11 @@ function devices(selected) {
 function selected() {
   return [...$("devices").querySelectorAll(":checked")].map((x) => x.value);
 }
+function replayConcurrency() {
+  const input = $("replayConcurrency");
+  if (!input.validity.valid) throw Error("并发实例数必须为正整数");
+  return input.value === "" ? null : input.valueAsNumber;
+}
 function config() {
   const variables = {};
   for (const line of $("variables")
@@ -58,6 +63,7 @@ function config() {
     variables,
     primaryVariable: $("primaryVariable").value.trim(),
     selected: selected(),
+    replayConcurrency: replayConcurrency(),
     custom: JSON.parse($("custom").value || "[]"),
     explore: $("explore").checked,
     exploreMode: $("exploreMode").value,
@@ -70,6 +76,7 @@ function config() {
   };
 }
 async function estimate() {
+  $("replayConcurrency").placeholder = "自动（" + selected().length + "）";
   const n = ++estimateId;
   try {
     const { total } = await api("/api/plan", config());
@@ -259,47 +266,57 @@ async function history() {
 function show(e) {
   if ($("err")) $("err").textContent = e.message;
 }
-let previewKey = "", previewBusy = false, nextFrame = 0, frameUrl;
-function clearFrame() {
-  $("screen").contentDocument.body.textContent = "正在获取画面…";
-  if (frameUrl) URL.revokeObjectURL(frameUrl);
-  frameUrl = null;
-}
-async function updatePreview(job) {
-  const running = job?.status === "running";
-  $("preview").hidden = !running;
-  const key = running && $("preview").open && !document.hidden
-    ? "/api/preview?job=" + job.id + "&run=" + (job.done + 1) : "";
-  if (key !== previewKey) {
-    previewKey = key;
-    clearFrame();
-    nextFrame = 0;
-  }
-  if (!key || previewBusy || Date.now() < nextFrame) return;
-  previewBusy = true;
+const previewCards = new Map();
+async function refreshFrame(card, key) {
+  card.busy = true;
   let url;
   try {
-    const response = await fetch(key);
-    if (response.status !== 200) throw Error();
+    const response = await fetch(key, {signal:card.controller.signal});
+    if (response.status !== 200) return;
     url = URL.createObjectURL(await response.blob());
     const img = new Image();
-    img.alt = job.active + "的当前画面";
+    img.alt = card.caption.textContent;
     img.src = url;
     await img.decode();
-    if (key !== previewKey) return;
-    clearFrame();
-    $("screen").contentDocument.body.replaceChildren(img);
-    frameUrl = url;
+    if (card.controller.signal.aborted) return;
+    card.frame.replaceChildren(img);
+    if (card.url) URL.revokeObjectURL(card.url);
+    card.url = url;
     url = null;
   } catch {
-    if (key === previewKey) {
-      clearFrame();
-      $("screen").contentDocument.body.textContent = "等待窗口画面…";
-    }
+    // The next poll retries while the environment is active.
   } finally {
     if (url) URL.revokeObjectURL(url);
-    if (key === previewKey) nextFrame = Date.now() + 1000;
-    previewBusy = false;
+    card.next = Date.now() + 1000;
+    card.busy = false;
+  }
+}
+function updatePreview(job) {
+  const running = job?.status === "running";
+  $("preview").hidden = !running;
+  const live = new Set();
+  if (running && $("preview").open && !document.hidden) {
+    for (const instance of job.instances || []) {
+      const key = "/api/preview?job=" + job.id + "&run=" + instance.run;
+      live.add(key);
+      let card = previewCards.get(key);
+      if (!card) {
+        const el = create("figure"), caption = create("figcaption", "#" + instance.run + " · " + instance.title);
+        const frame = create("div", "等待窗口画面…");
+        el.append(caption,frame);
+        $("screens").append(el);
+        card = {el,caption,frame,controller:new AbortController(),next:0};
+        previewCards.set(key,card);
+      }
+      if (!card.busy && Date.now() >= card.next) refreshFrame(card,key);
+    }
+  }
+  for (const [key,card] of previewCards) {
+    if (live.has(key)) continue;
+    card.controller.abort();
+    if (card.url) URL.revokeObjectURL(card.url);
+    card.el.remove();
+    previewCards.delete(key);
   }
 }
 let manualToken;
@@ -367,7 +384,7 @@ async function editRerun(task) {
     }
     $("rerunStart").disabled = true;
     try {
-      await api("/api/replays/start", {id:task.id, mode:"all", variables});
+      await api("/api/replays/start", {id:task.id, mode:"all", variables, replayConcurrency:replayConcurrency()});
       replayViewKey = "";
       dialog.close();
     } catch (e) {
@@ -414,7 +431,7 @@ async function refreshReplays(job) {
     for (const [mode,label] of [["continue","继续重放"],["all","全量重跑"]]) {
       button(label, running || (mode === "continue" && task.rowIndex === task.total), async () => {
         if (mode === "all") return editRerun(task);
-        await api("/api/replays/start", {id:task.id, mode});
+        await api("/api/replays/start", {id:task.id, mode, replayConcurrency:replayConcurrency()});
         replayViewKey = "";
       });
     }
@@ -518,6 +535,7 @@ async function init() {
   $("custom").value = JSON.stringify(s.custom, null, 2);
   $("explore").checked = s.explore;
   $("exploreMode").value = s.exploreMode || "manual";
+  $("replayConcurrency").value = s.replayConcurrency ?? "";
   devices(s.selected);
   $("custom").onchange = () => {
     try {

@@ -31,6 +31,8 @@
         <fieldset>
           <legend>浏览环境</legend>
           <div id="devices"></div>
+          <label>并发实例数<input type="number" min="1" step="1" id="replayConcurrency" />
+            <small>适用于资源加载和路径重放。留空时使用任务勾选的浏览环境数。</small></label>
         </fieldset>
         <details>
           <summary>自定义机型与探索参数</summary>
@@ -120,8 +122,7 @@
       </section>
       <details id="preview" open hidden>
         <summary>实时窗口预览</summary>
-        <iframe id="screen" title="当前运行环境的实时画面" sandbox="allow-same-origin"
-          srcdoc="<html lang='zh-CN'><meta charset='utf-8'><style>body{margin:0;display:grid;place-items:center;height:100vh;background:#eff3ee;color:#435b50;font:14px system-ui}img{width:100%;height:100vh;object-fit:contain}</style><body>正在获取画面…</body></html>"></iframe>
+        <div id="screens" aria-label="运行实例预览"></div>
       </details>
       <div class="sectiontitle">
         <h2>请求时间线</h2>

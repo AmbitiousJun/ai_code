@@ -63,6 +63,8 @@ function plan(input) {
   if (new Set(available.map((p) => p.id)).size !== available.length)
     throw Error("机型 id 重复");
   const selected = available.filter((p) => cfg.selected.includes(p.id));
+  if (cfg.replayConcurrency != null && (!Number.isSafeInteger(cfg.replayConcurrency) || cfg.replayConcurrency < 1))
+    throw Error("并发实例数必须为正整数");
   if (!selected.length) throw Error("请选择机型");
   for (const [k, min, max] of [
     ["waitSeconds", 1, Infinity],

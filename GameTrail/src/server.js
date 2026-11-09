@@ -44,8 +44,8 @@ function openUi(url) {
   }
 }
 const cache = new Cache(path.join(root, "cache"));
-let preview = null,
-  current = null,
+const previews = new Map();
+let current = null,
   ctrl = null;
 const {ReplayStore} = require("./replay-store");
 const replayStore = new ReplayStore(path.join(root, "replays.sqlite"));
@@ -57,7 +57,11 @@ function start(cfg, saved, full = false) {
   const planned = plan(cfg);
   const firstReplay = planned.findIndex(row => row.phase === "replay");
   const startRow = saved && !full ? saved.rowIndex : 0;
-  const rows = saved ? planned.slice(firstReplay + startRow) : planned;
+  const rows = saved ? planned.slice(firstReplay + startRow).map((row,i) => ({
+    ...row, replayIndex:startRow+i,
+  })).filter(row => full || saved.progress.get(row.replayIndex) !== -1) : planned;
+  const concurrency = cfg.replayConcurrency ?? new Set(planned.map(row => row.device.id)).size;
+  const active = new Map();
   if (!rows.length) throw Error("已完成全部重放，可选择全量重跑");
   let groups = saved?.groups ?? new Map();
   if (saved && !rows[0].primary && cfg.recordedVariables) {
@@ -115,8 +119,8 @@ function start(cfg, saved, full = false) {
     }
   };
   (async () => {
-    for (const [i, row] of rows.entries()) {
-      if (signal.aborted) break;
+    async function executeRow(i) {
+      const row = rows[i];
       const run = i + 1,
         label = [Object.values(row.vars).join(" / "), row.device.name]
           .filter(Boolean)
@@ -125,15 +129,22 @@ function start(cfg, saved, full = false) {
       const library = groups.get(row.group);
       const groupLabel = row.primary ? row.primary + "=" + row.group : "环境 " + row.group;
       const phaseLabel = row.phase === "record" ? "手动录入" : row.phase === "discover" ? "发现路径" : row.phase === "replay" ? "重放路径" : "加载资源";
-      job.active = [groupLabel, phaseLabel, label].join(" · ");
-      job.paths = { groupLabel, phaseLabel, count: library.length };
+      const title = [groupLabel, phaseLabel, label].join(" · ");
+      const paths = { groupLabel, phaseLabel, count: library.length };
+      active.set(run, {run, title, paths});
+      const syncActive = () => {
+        job.instances = [...active.values()];
+        job.active = active.size > 1 ? active.size + " 个实例运行中" : job.instances[0]?.title || "";
+        job.paths = active.size === 1 ? job.instances[0].paths : null;
+      };
+      syncActive();
       let issues = 0;
       const emit = (e) => {
         if (e.kind === "warning" || e.kind === "failed" || e.status >= 400)
           issues++;
         if (e.kind === "action") {
-          job.paths.count = library.length;
-          job.paths.activity = e.message;
+          paths.count = library.length;
+          paths.activity = e.message;
         }
         if (e.diagnostic) (summary.diagnostics ||= []).push({message:e.message,file:e.diagnostic});
         record({ run, ...e });
@@ -146,7 +157,7 @@ function start(cfg, saved, full = false) {
         vars: row.vars, group: row.group, phase: phaseLabel,
       };
       const shot = path.join(dir, run + ".png");
-      emit({ kind: "run", message: job.active });
+      emit({ kind: "run", message: title });
       const isManual = cfg.explore && cfg.exploreMode === "manual";
       const execute = isManual ? runManual : runOne;
       let checkpoint;
@@ -155,19 +166,19 @@ function start(cfg, saved, full = false) {
           job.replayId = replayStore.create(cfg, groups, planned.length - firstReplay, row.url);
           replayRevision++;
         }
-        const index = saved ? startRow + i : i - firstReplay;
-        const advance = (rowIndex, pathIndex) => {
-          replayStore.advance(job.replayId, rowIndex, pathIndex);
+        const index = row.replayIndex ?? (i - firstReplay);
+        const advance = pathIndex => {
+          replayStore.checkpoint(job.replayId, index, pathIndex);
           replayRevision++;
         };
         checkpoint = {
-          pathIndex: saved && !full && i === 0 ? saved.pathIndex : 0,
-          advance: next => advance(index, next),
-          finish: () => advance(index + 1, 0),
+          pathIndex: saved && !full ? (saved.progress.get(index) ?? (index === startRow ? saved.pathIndex : 0)) : 0,
+          advance,
+          finish: () => advance(-1),
         };
       }
       const extraArgs = isManual ? [manualPrompt, checkpoint] : [];
-      const capturePreview = capture => { preview = { jobId: id, run, capture }; };
+      const capturePreview = capture => { previews.set(run, { jobId: id, run, capture }); };
       try {
         Object.assign(
           summary,
@@ -182,7 +193,9 @@ function start(cfg, saved, full = false) {
         summary.error = e.message;
         emit({ kind: "warning", message: e.message.split("\n")[0] });
       } finally {
-        preview = null;
+        previews.delete(run);
+        active.delete(run);
+        syncActive();
       }
       if (checkpoint && !signal.aborted) checkpoint.finish();
       summary.issues = issues;
@@ -192,6 +205,29 @@ function start(cfg, saved, full = false) {
       job.runs.push(summary);
       job.done++;
     }
+    // Recording and discovery must finish before dependent environments start.
+    for (let i = 0; i < rows.length && !signal.aborted;) {
+      const phase = rows[i].phase;
+      if (phase !== "load" && phase !== "replay") {
+        await executeRow(i++);
+        continue;
+      }
+      let end = i + 1;
+      while (end < rows.length && rows[end].phase === phase) end++;
+      const worker = async () => {
+        try {
+          while (!signal.aborted && i < end) await executeRow(i++);
+        } catch (error) {
+          ctrl.abort();
+          throw error;
+        }
+      };
+      const workers = Array.from({length:Math.min(concurrency,end-i)}, worker);
+      const results = await Promise.allSettled(workers);
+      const failure = results.find(result => result.status === "rejected");
+      if (failure) throw failure.reason;
+    }
+    job.runs.sort((a,b) => a.run-b.run);
     job.status = signal.aborted
       ? "cancelled"
       : job.runs.some((r) => r.status !== "完成")
@@ -284,6 +320,7 @@ const server = http.createServer(async (req, res) => {
         if (!["all","continue"].includes(data.mode)) throw Error("重放方式无效");
         const task = replayStore.load(data.id);
         const cfg = {...task.config};
+        if (Object.hasOwn(data, "replayConcurrency")) cfg.replayConcurrency = data.replayConcurrency;
         if (data.variables !== undefined) {
           if (data.mode !== "all") throw Error("只有全量重跑可以调整模板变量");
           if (!data.variables || typeof data.variables !== "object" || Array.isArray(data.variables))
@@ -376,12 +413,12 @@ const server = http.createServer(async (req, res) => {
         : null);
     }
     if (req.method === "GET" && p === "/api/preview") {
-      const frame = preview;
-      const matches = frame && frame.jobId === u.searchParams.get("job") &&
-        frame.run === Number(u.searchParams.get("run"));
+      const run = Number(u.searchParams.get("run"));
+      const frame = previews.get(run);
+      const matches = frame && frame.jobId === u.searchParams.get("job");
       const jpeg = matches && await frame.capture();
       res.setHeader("Cache-Control", "no-store");
-      if (!jpeg || frame !== preview || ctrl.signal.aborted) {
+      if (!jpeg || frame !== previews.get(run) || ctrl.signal.aborted) {
         res.writeHead(204);
         return res.end();
       }

@@ -136,3 +136,28 @@ test("工作台保存录入结果，中断第二条路径后重启服务可续�
     assert.equal(updated.total,job.runs.length);
   }
 });
+
+test("并发环境乱序完成时保留各自的断点，全量重跑清空所有断点", () => {
+  const store = new ReplayStore(":memory:");
+  try {
+    const id = store.create({}, new Map(), 5, "https://game.invalid");
+    store.checkpoint(id, 2, -1);
+    store.checkpoint(id, 1, 3);
+    store.checkpoint(id, 0, 1);
+    assert.deepEqual([...store.load(id).progress], [[1,3],[2,-1]]);
+    assert.equal(store.load(id).pathIndex, 1);
+    store.checkpoint(id, 0, -1);
+    assert.equal(store.load(id).rowIndex, 1);
+    assert.equal(store.load(id).pathIndex, 3);
+    store.checkpoint(id, 1, -1);
+    assert.equal(store.load(id).rowIndex, 3);
+    store.checkpoint(id, 3, 1);
+    const config = {variables:{gameId:["new"]}};
+    store.checkpoint(id, 4, -1);
+    store.restart(id, config, 1);
+    const reset = store.load(id);
+    assert.deepEqual(reset.config, config);
+    assert.equal(reset.total, 1);
+    assert.deepEqual([reset.rowIndex, reset.pathIndex, reset.progress.size], [0,0,0]);
+  } finally { store.db.close(); }
+});
