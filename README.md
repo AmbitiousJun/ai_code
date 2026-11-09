@@ -5,3 +5,4 @@
 
 
 - FlowSentinel：chrome 自动化操作录制与回放，定时巡检异常状态并自动恢复
+- GameTrail：自动化游戏资源预热器
