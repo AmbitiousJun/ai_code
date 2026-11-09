@@ -338,6 +338,46 @@ function renderManual(job) {
   if (m.allowed.includes("done")) button(m.paths.length ? "录入完毕，继续" : "跳过此游戏", "done");
 }
 let replayViewKey = "";
+async function editRerun(task) {
+  const saved = await api("/api/replays/config?id=" + encodeURIComponent(task.id));
+  const dialog = $("rerunDialog"), fields = $("rerunFields");
+  fields.replaceChildren();
+  $("rerunName").textContent = task.name;
+  $("rerunHint").textContent = (saved.primaryVariable
+    ? "按 " + saved.primaryVariable + " 复用已录路径。"
+    : "按原变量组合和机型复用已录路径。") + "没有对应路径的环境只加载入口。开始后将重置此任务的进度。";
+  $("rerunError").textContent = "";
+  const keys = new Set([...saved.template.matchAll(/\{([\w-]+)\}/g)].map(match => match[1]));
+  for (const key of keys) {
+    const label = create("label", key), input = create("textarea");
+    input.name = key;
+    input.rows = 3;
+    input.required = true;
+    input.value = saved.variables[key].join("\n");
+    label.append(create("small", "每行一个值"), input);
+    fields.append(label);
+  }
+  $("rerunCancel").onclick = () => dialog.close();
+  $("rerunForm").onsubmit = async event => {
+    event.preventDefault();
+    const variables = {...saved.variables};
+    for (const field of fields.querySelectorAll("textarea")) {
+      if (field.value !== saved.variables[field.name].join("\n"))
+        variables[field.name] = field.value.split("\n").map(value => value.trim()).filter(Boolean);
+    }
+    $("rerunStart").disabled = true;
+    try {
+      await api("/api/replays/start", {id:task.id, mode:"all", variables});
+      replayViewKey = "";
+      dialog.close();
+    } catch (e) {
+      $("rerunError").textContent = e.message;
+    } finally {
+      $("rerunStart").disabled = false;
+    }
+  };
+  dialog.showModal();
+}
 const replayBoxes = () => [...$("replays").querySelectorAll("input:enabled")];
 function replaySelection() {
   const boxes = replayBoxes(), count = boxes.filter(box => box.checked).length;
@@ -373,6 +413,7 @@ async function refreshReplays(job) {
     }
     for (const [mode,label] of [["continue","继续重放"],["all","全量重跑"]]) {
       button(label, running || (mode === "continue" && task.rowIndex === task.total), async () => {
+        if (mode === "all") return editRerun(task);
         await api("/api/replays/start", {id:task.id, mode});
         replayViewKey = "";
       });

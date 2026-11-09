@@ -121,12 +121,18 @@ test("工作台保存录入结果，中断第二条路径后重启服务可续�
   await closed;
   await boot();
   for (const mode of ["continue","all"]) {
-    const {id} = await api("replays/start",{id:saved.id, mode});
+    const variables = {gameId:["demo"], lang:["de-DE"]};
+    const {id} = await api("replays/start",{id:saved.id, mode, ...(mode === "all" ? {variables} : {})});
     const job = await until(j=>j?.id === id && j.status !== "running");
     assert.equal(job.status,"complete");
-    assert.equal(job.runs.length,2);
-    assert.equal(job.runs[1].replayedPaths,2);
+    assert.equal(job.runs.length,mode === "all" ? 1 : 2);
+    if (mode === "all") {
+      assert.equal(job.runs[0].vars.lang,"de-DE");
+      assert.deepEqual((await api("replays/config?id="+saved.id)).variables,variables);
+    } else assert.equal(job.runs[1].replayedPaths,2);
     assert.equal(job.runs[0].replayedPaths, mode === "all" ? 2 : 1);
-    assert.equal((await api("replays"))[0].rowIndex,2);
+    const [updated] = await api("replays");
+    assert.equal(updated.rowIndex,job.runs.length);
+    assert.equal(updated.total,job.runs.length);
   }
 });

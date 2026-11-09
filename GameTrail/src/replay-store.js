@@ -28,6 +28,16 @@ class ReplayStore {
   advance(id, rowIndex, pathIndex) {
     this.db.prepare("UPDATE tasks SET rowIndex=?, pathIndex=? WHERE id=?").run(rowIndex,pathIndex,id);
   }
+  variables(id) {
+    const row = this.db.prepare("SELECT config FROM tasks WHERE id=?").get(id);
+    if (!row) throw Error("重放任务不存在");
+    const {template, variables, primaryVariable} = JSON.parse(row.config);
+    return {template, variables, primaryVariable:primaryVariable ?? (template.includes("{gameId}") ? "gameId" : "")};
+  }
+  restart(id, config, total) {
+    this.db.prepare("UPDATE tasks SET config=?, total=?, rowIndex=0, pathIndex=0 WHERE id=?")
+      .run(JSON.stringify(config), total, id);
+  }
   rename(id, name) {
     if (typeof name !== "string" || !name.trim() || name.trim().length > 120)
       throw Error("任务名称应为 1–120 个字符");

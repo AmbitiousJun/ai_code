@@ -266,3 +266,6 @@ details {
 #replayTools:not([hidden]) { display: flex; align-items: center; gap: 8px; }
 .replayRow { flex-wrap: wrap; margin: 6px 0; }
 .replayRow span { flex: 1 1 250px; overflow-wrap: anywhere; }
+#rerunDialog { width: min(460px, 94vw); border: 1px solid #bac7bc; border-radius: 10px; color: inherit; }
+#rerunDialog::backdrop { background: #123d3655; }
+#rerunError { color: #963c28; }

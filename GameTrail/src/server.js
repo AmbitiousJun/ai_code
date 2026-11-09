@@ -59,11 +59,20 @@ function start(cfg, saved, full = false) {
   const startRow = saved && !full ? saved.rowIndex : 0;
   const rows = saved ? planned.slice(firstReplay + startRow) : planned;
   if (!rows.length) throw Error("已完成全部重放，可选择全量重跑");
+  let groups = saved?.groups ?? new Map();
+  if (saved && !rows[0].primary && cfg.recordedVariables) {
+    // Legacy independent environments are numbered in the original plan's order.
+    const identity = row => JSON.stringify([row.device.id, row.vars]);
+    const original = plan({...cfg, variables:cfg.recordedVariables});
+    const byEnvironment = new Map(original.filter(row => row.phase === "replay")
+      .map(row => [identity(row), saved.groups.get(row.group)]));
+    groups = new Map(planned.slice(firstReplay).map(row => [row.group, byEnvironment.get(identity(row)) ?? []]));
+  }
   const id = new Date().toISOString().replace(/[:.]/g, "-"),
     dir = path.join(reports, id);
   fs.mkdirSync(dir);
   if (!saved) fs.writeFileSync(settings, JSON.stringify(cfg, null, 2));
-  if (saved && full) replayStore.advance(saved.id, 0, 0);
+  if (saved && full) replayStore.restart(saved.id, cfg, rows.length);
   current = {
     id,
     status: "running",
@@ -79,8 +88,7 @@ function start(cfg, saved, full = false) {
   };
   ctrl = new AbortController();
   const job = current,
-    signal = ctrl.signal,
-    groups = saved?.groups ?? new Map();
+    signal = ctrl.signal;
   if (saved) {
     job.replayId = saved.id;
     replayRevision++;
@@ -268,11 +276,23 @@ const server = http.createServer(async (req, res) => {
       if (!req.headers["content-type"]?.startsWith("application/json"))
         return json({ error: "需要 JSON" }, 415);
       const data = await body(req);
-      if (p === "/api/start") return json(start({ ...defaults, ...data }));
+      if (p === "/api/start") {
+        delete data.recordedVariables;
+        return json(start({ ...defaults, ...data }));
+      }
       if (p === "/api/replays/start") {
         if (!["all","continue"].includes(data.mode)) throw Error("重放方式无效");
         const task = replayStore.load(data.id);
-        return json(start(task.config, task, data.mode === "all"));
+        const cfg = {...task.config};
+        if (data.variables !== undefined) {
+          if (data.mode !== "all") throw Error("只有全量重跑可以调整模板变量");
+          if (!data.variables || typeof data.variables !== "object" || Array.isArray(data.variables))
+            throw Error("模板变量格式无效");
+          if (!(cfg.primaryVariable ?? (cfg.template.includes("{gameId}") ? "gameId" : "")))
+            cfg.recordedVariables ??= cfg.variables;
+          cfg.variables = data.variables;
+        }
+        return json(start(cfg, task, data.mode === "all"));
       }
       if (p === "/api/replays/rename" || p === "/api/replays/delete") {
         if (p.endsWith("/rename")) replayStore.rename(data.id, data.name);
@@ -384,6 +404,7 @@ const server = http.createServer(async (req, res) => {
         cache: cache.stats(),
       });
     if (p === "/api/replays") return json(replayStore.list());
+    if (p === "/api/replays/config") return json(replayStore.variables(u.searchParams.get("id")));
     if (p === "/api/history")
       return json(completedReports());
     let file, mt;

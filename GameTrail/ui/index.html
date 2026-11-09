@@ -152,6 +152,17 @@
         <button id="deleteReplays" class="secondary" disabled>删除所选任务</button>
       </div>
       <div id="replays"></div>
+      <dialog id="rerunDialog" aria-labelledby="rerunTitle">
+        <form id="rerunForm">
+          <h2 id="rerunTitle">全量重跑</h2>
+          <p id="rerunName"></p>
+          <p id="rerunHint"></p>
+          <div id="rerunFields"></div>
+          <p id="rerunError" role="alert"></p>
+          <button type="button" id="rerunCancel" class="secondary">取消</button>
+          <button type="submit" id="rerunStart">保存并从头重跑</button>
+        </form>
+      </dialog>
       <h2>任务报告</h2>
       <div id="reportTools" hidden>
         <label class="check"><input type="checkbox" id="selectAll" />全选</label>
