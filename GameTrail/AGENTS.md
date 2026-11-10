@@ -2,7 +2,7 @@
 
 ## 使用
 
-Windows x64 便携版为 dist/GameTrail.exe（0.6.11）。双击后启动器将内嵌的 Node、工作台与浏览器解压到本次启动专用的临时目录，正常退出时清理。设置、缓存、报告和已保存的重放任务继续使用原数据目录。发行时只需复制这个 EXE。
+Windows x64 便携版为 dist/GameTrail.exe（0.6.12）。双击后启动器将内嵌的 Node、工作台与浏览器解压到本次启动专用的临时目录，正常退出时清理。设置、缓存、报告和已保存的重放任务继续使用原数据目录。发行时只需复制这个 EXE。
 
 macOS arm64 发行包名为 dist/GameTrail-0.6.9-macOS-arm64.zip。解压并双击 GameTrail.app，程序会在默认浏览器打开本地工作台。发行包自带 Node、Chromium、WebKit 和 Apple Vision 文字识别组件。右上角“退出程序”关闭服务；运行中先点“停止”。关闭工作台标签页后，可再次打开应用。
 
@@ -82,7 +82,7 @@ source=network 表示浏览器观察到网络响应，cache 表示本机命中�
 | test/replay-isolation.test.js | 并发回放时的截图超时、资源请求、预览响应与失败诊断验证 |
 | src/visual-match.js | 新版无损选区的亮度与颜色匹配、游戏画面缩放倍率细搜及失败候选定位 |
 | src/pixel-button.js | 对手动框选的按钮像素样本在当前视口内进行多尺度匹配，排除低特征和多处近似匹配 |
-| src/manual-actions.js | 浏览器内的真实操作捕获、DOM 控件和 Cocos 按钮绑定的语义定位及调用、Cocos 触摸目标节点与当前画布位置换算 |
+| src/manual-actions.js | 浏览器内的真实操作捕获、DOM 控件和 Cocos 按钮绑定的语义定位及调用、Cocos 触摸目标节点与当前画布位置换算、Android 框选回放的触摸接收节点观测 |
 | test/load-concurrency.test.js | 从工作台关闭探索后，验证默认及自定义并发数、多实例预览和各环境完成状态 |
 | test/replays.test.js | 截图降阈值与歧义、重放任务管理、停止并重启服务后的续跑和全量重跑 |
 | test/manual.test.js | 手动多路径、无法录入的动作、独立入口验证、跳过分组和跨尺寸批量重放回归 |
@@ -195,3 +195,10 @@ Windows x64 发行包验收使用单文件 EXE、独立数据目录、5 秒 GET 
 ## Windows 0.6.10 并发截图验收
 
 从 dist/GameTrail.exe 启动独立数据目录，使用两个并发 Android 竖屏环境重放。一条路径按 100% 相似度查找缺失图案直至 6 秒超时，另一环境每 150 毫秒向本机测试站点发出 GET。超时前 4.5 秒内，两个实例均取得多帧不同采集时间的 JPEG，测试站点收到连续请求，工作台状态轮询持续返回；各项采样的最大间隔均小于 3 秒。失败路径生成嵌入当次 PNG 的诊断图，两个环境均完成。
+
+## Windows 0.6.12 Android 竖屏框选回放
+
+在已定位的 Android Cocos 画布回放框选步骤时，时间线记录匹配框尺寸、发出的坐标、Canvas 收到的 touchstart/touchend 坐标与 Cocos 接收节点。同一手势的按下和松开均仅交给 ScrollForMask 遮罩时，程序在本步原超时内重新扫描画面，取得唯一目标后再轻触一次。再次被该遮罩拦截则生成诊断图并跳过路径。已保存的框选样本可直接使用。
+
+游戏 573 的原桌面录制路径已在 Android 竖屏独立会话验证：同一齿轮落点第一次被 ScrollForMask 接收，重新匹配后的轻触交给 btn_comm，随后点中 btn_info，重现了录制的说明页。
+从 dist/GameTrail.exe 启动 0.6.12 后，在独立数据目录重放游戏 424 的 Android 竖屏旧路径。第 4 步第一次命中 ScrollForMask，重扫后的同一落点命中 btn_comm；第 5 步命中 btn_info，报告记录一条成功路径。

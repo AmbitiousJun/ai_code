@@ -173,6 +173,69 @@ test("框选动作等待唯一图案，超时跳过，出现后点击当前位�
     assert.ok(events.some(e=>e.message.includes("像素图")));
   } finally {await browser.close();}
 });
+test("Android 截图回放识别遮罩拦截，重新定位齿轮且仅重试一次", async () => {
+  const { replay } = require("../src/manual");
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({hasTouch:true, isMobile:true, viewport:{width:180,height:160}});
+    await page.setContent('<meta name="viewport" content="width=device-width"><style>*{margin:0}</style><canvas width="180" height="160"></canvas>');
+    const samples = await page.evaluate(() => {
+      const canvas = document.querySelector("canvas"), ctx = canvas.getContext("2d");
+      class Node { constructor(name) { this.name=name; } dispatchEvent() {} }
+      window.cc = {Node,game:{canvas},sys:{os:"Android"}};
+      const mask=new Node("ScrollForMask"),gear=new Node("gear"),infoNode=new Node("info");
+      window.originalDispatch=Node.prototype.dispatchEvent;
+      window.inputs = [];
+      function draw(x,color) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x,30,20,20);
+        ctx.fillStyle = "#eee";
+        ctx.fillRect(x,30,8,8);
+        return Array.from(ctx.getImageData(x,30,20,20).data).filter((_,i) => i%4 !== 3);
+      }
+      window.resetGear = () => {ctx.clearRect(0,0,180,160); draw(20,"#b32"); window.inputs=[]; window.gearX=20; window.mask=true;};
+      const info = draw(100,"#259");
+      window.resetGear();
+      let receiver;
+      canvas.addEventListener("touchstart", e => {
+        const x = e.changedTouches[0].clientX;
+        receiver = window.mask ? mask : Math.abs(x-window.gearX-10)<10 ? gear : x>100 ? infoNode : null;
+        receiver?.dispatchEvent({type:"touch-start"});
+      });
+      canvas.addEventListener("touchend", () => {
+        receiver?.dispatchEvent({type:"touch-end"});
+        window.inputs.push(receiver?.name);
+        if (receiver === mask && !window.persistent) {
+          window.mask=false;
+          ctx.clearRect(0,0,180,160);
+          window.gearX=60;
+          draw(window.gearX,"#b32");
+        }
+        if (receiver === gear) draw(100,"#259");
+      });
+      return [draw(20,"#b32"), info];
+    });
+    const steps = samples.map((rgb,i) => ({name:i ? "说明" : "设置",pixels:{
+      rgb:Buffer.from(rgb).toString("base64"),width:20,height:20,viewWidth:180,viewHeight:160,
+      game:{route:[],index:0,width:180,height:160}
+    }}));
+    await page.evaluate(require("../src/manual-actions").installManualActions);
+    const events=[];
+    const play = steps => replay(page,{steps,frames:[]},new AbortController().signal,e=>events.push(e),
+      {active:new Set(),paths:new Set(),lastGET:0,quietMs:0,hasTouch:true},"",
+      {pixelTimeout:15,pixelSimilarity:100});
+    await play(steps).catch(async error => {
+      assert.fail(error.message + " · " + JSON.stringify(events) + " · " + JSON.stringify(await page.evaluate(()=>window.inputs)));
+    });
+    assert.deepEqual(await page.evaluate(()=>window.inputs),["ScrollForMask","gear","info"]);
+    assert.ok(events.some(e=>e.message.includes("touchend(") && e.message.includes("重新匹配本步")));
+    await page.evaluate(()=>{window.resetGear();window.persistent=true;});
+    await assert.rejects(play([steps[0]]),/重试后仍被拦截/);
+    assert.deepEqual(await page.evaluate(()=>window.inputs),["ScrollForMask","ScrollForMask"]);
+    assert.ok(await page.evaluate(()=>cc.Node.prototype.dispatchEvent===window.originalDispatch));
+  } finally { await browser.close(); }
+});
+
 test("无绑定 Cocos 触摸节点在子 frame 移位后以真实触屏操作重放", async () => {
   const {installManualActions} = require("../src/manual-actions");
   const {replay} = require("../src/manual");

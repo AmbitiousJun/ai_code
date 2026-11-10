@@ -219,6 +219,44 @@ function installManualActions() {
     matches[0].emit(args);
     return true;
   }
-  Object.defineProperty(window, "__gtManual", { value: { invoke } });
+  let finishPixelTouch;
+  function watchPixelTouch(index) {
+    const cc = window.cc, proto = cc?.Node?.prototype;
+    const canvas = document.querySelectorAll("canvas")[index];
+    if (cc?.sys?.os !== "Android" || !canvas || cc.game?.canvas !== canvas ||
+        typeof proto?.dispatchEvent !== "function") return false;
+    finishPixelTouch?.();
+    const original = proto.dispatchEvent;
+    const nodes = [], points = [];
+    function dispatch(event) {
+      if (event?.type === "touch-start" || event?.type === "touch-end")
+        nodes.push({type:event.type,node:this,name:this.name});
+      return original.apply(this, arguments);
+    }
+    function observe(e) {
+      if (e.target !== canvas || !e.isTrusted || e.changedTouches.length !== 1) return;
+      const {clientX,clientY} = e.changedTouches[0];
+      points.push(e.type + "(" + clientX + ", " + clientY + ")");
+    }
+    proto.dispatchEvent = dispatch;
+    window.addEventListener("touchstart", observe, {capture:true,passive:true});
+    window.addEventListener("touchend", observe, {capture:true,passive:true});
+    finishPixelTouch = () => {
+      if (proto.dispatchEvent === dispatch) proto.dispatchEvent = original;
+      window.removeEventListener("touchstart", observe, true);
+      window.removeEventListener("touchend", observe, true);
+      finishPixelTouch = undefined;
+      const [start,end] = nodes;
+      return {
+        maskOnly:points.length === 2 && nodes.length === 2 && start.type === "touch-start" &&
+          end.type === "touch-end" && start.node === end.node && start.name === "ScrollForMask",
+        summary:[...points,...nodes.map(e=>e.type + "→" + e.name)].join(" ")
+      };
+    };
+    return true;
+  }
+  Object.defineProperty(window, "__gtManual", { value: {
+    invoke, watchPixelTouch, finishPixelTouch:() => finishPixelTouch?.()
+  } });
 }
 module.exports = { installManualActions };

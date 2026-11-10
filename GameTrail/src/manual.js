@@ -90,7 +90,7 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
       let threshold = cfg.pixelSimilarity ?? defaults.pixelSimilarity, previousCount;
       const until = started + (step.pixels ? cfg.pixelTimeout ?? defaults.pixelTimeout : 15) * 1000;
       const scanSignal = step.pixels && AbortSignal.any([signal, AbortSignal.timeout(until - started)]);
-      let ok = false, lastScan, maxCount = 0;
+      let retriedMask = false, ok = false, lastScan, maxCount = 0;
       observed.paths.clear();
       while (!ok && Date.now() < until) {
         signal.throwIfAborted();
@@ -98,7 +98,8 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
           const timeout = Math.max(1, Math.min(3000, until - Date.now()));
           const minimum = Math.max(1, (cfg.pixelSimilarity ?? defaults.pixelSimilarity) - Math.floor((Date.now() - started) / 10000));
           const game = step.pixels.game;
-          const canvas = game && resolveFrame(page,game.route,lang)?.locator("canvas").nth(game.index);
+          const frame = game && resolveFrame(page,game.route,lang);
+          const canvas = frame?.locator("canvas").nth(game.index);
           const box = canvas && await gameArea(canvas).catch(()=>null);
           const scale = box ? [box.width/game.width,box.height/game.height] : [];
           const scan = await scanPixels(page, step.pixels, minimum, timeout, scale, scanSignal)
@@ -119,10 +120,26 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
           }
           if (hits?.length === 1) {
             const point = hits[0];
-            await clickPoint(page, point, observed.hasTouch);
-            ok = true;
+            const watch = observed.hasTouch && frame && await frame.evaluate(index =>
+              window.__gtManual?.watchPixelTouch(index), game.index).catch(() => false);
+            let received;
+            try {
+              await clickPoint(page, point, observed.hasTouch);
+            } finally {
+              if (watch) received = await frame.evaluate(() => window.__gtManual?.finishPixelTouch()).catch(() => null);
+            }
             const similarity = (100 * (1 - point.score / 255)).toFixed(1);
-            emit({kind:"action",message:"已匹配像素图并点击 · " + step.name + " · 相似度 " + similarity + "%"});
+            const detail = " · " + (observed.hasTouch ? "触摸" : "鼠标") + " (" + point.x + ", " + point.y +
+              ") · 匹配框 " + point.w + "×" + point.h + (received?.summary ? " · " + received.summary : "");
+            if (received?.maskOnly) {
+              const reason = "第 " + (i+1) + " 步触摸被 ScrollForMask 遮罩接收" + detail;
+              if (retriedMask) throw pixelFailure(reason + " · 重试后仍被拦截，跳过路径",scan,step.pixels,shot,emit);
+              retriedMask = true;
+              emit({kind:"action",message:reason + " · 重新匹配本步"});
+            } else {
+              ok = true;
+              emit({kind:"action",message:"已匹配像素图并点击 · " + step.name + " · 相似度 " + similarity + "%" + detail});
+            }
           }
         } else {
           const frame = resolveFrame(page, step.route, lang);
