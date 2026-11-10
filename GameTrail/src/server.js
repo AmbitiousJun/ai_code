@@ -55,7 +55,10 @@ function start(cfg, saved, full = false) {
   delete cfg.labels;
   delete cfg.extraGets;
   if (current?.status === "running") throw Error("已有任务正在运行");
-  const planned = plan(cfg);
+  // Older checkpoints use environment indexes from the primary-first plan.
+  const legacyOrder = saved && !full && !cfg.variableOrder;
+  if (!legacyOrder) cfg.variableOrder ??= Object.keys(saved?.config.variables ?? cfg.variables);
+  const planned = plan(cfg, legacyOrder);
   const firstReplay = planned.findIndex(row => row.phase === "replay");
   const startRow = saved && !full ? saved.rowIndex : 0;
   const rows = saved ? planned.slice(firstReplay + startRow).map((row,i) => ({
@@ -67,8 +70,8 @@ function start(cfg, saved, full = false) {
   let groups = saved?.groups ?? new Map();
   if (saved && !rows[0].primary && cfg.recordedVariables) {
     // Legacy independent environments are numbered in the original plan's order.
-    const identity = row => JSON.stringify([row.device.id, row.vars]);
-    const original = plan({...cfg, variables:cfg.recordedVariables});
+    const identity = row => JSON.stringify([row.device.id, Object.keys(row.vars).sort().map(k => [k,row.vars[k]])]);
+    const original = plan({...cfg, variables:cfg.recordedVariables, variableOrder:cfg.recordedVariableOrder}, !cfg.recordedVariableOrder);
     const byEnvironment = new Map(original.filter(row => row.phase === "replay")
       .map(row => [identity(row), saved.groups.get(row.group)]));
     groups = new Map(planned.slice(firstReplay).map(row => [row.group, byEnvironment.get(identity(row)) ?? []]));
@@ -214,7 +217,8 @@ function start(cfg, saved, full = false) {
         continue;
       }
       let end = i + 1;
-      while (end < rows.length && rows[end].phase === phase) end++;
+      while (end < rows.length && rows[end].phase === phase &&
+        (phase !== "replay" || rows[end].batch === rows[i].batch)) end++;
       const worker = async () => {
         try {
           while (!signal.aborted && i < end) await executeRow(i++);
@@ -315,6 +319,7 @@ const server = http.createServer(async (req, res) => {
       const data = await body(req);
       if (p === "/api/start") {
         delete data.recordedVariables;
+        delete data.recordedVariableOrder;
         return json(start({ ...defaults, ...data }));
       }
       if (p === "/api/replays/start") {
@@ -326,9 +331,12 @@ const server = http.createServer(async (req, res) => {
           if (data.mode !== "all") throw Error("只有全量重跑可以调整模板变量");
           if (!data.variables || typeof data.variables !== "object" || Array.isArray(data.variables))
             throw Error("模板变量格式无效");
-          if (!(cfg.primaryVariable ?? (cfg.template.includes("{gameId}") ? "gameId" : "")))
-            cfg.recordedVariables ??= cfg.variables;
           cfg.variables = data.variables;
+        }
+        const primary = cfg.primaryVariable ?? (cfg.template.includes("{gameId}") ? "gameId" : "");
+        if (data.mode === "all" && !primary && !cfg.recordedVariables) {
+          cfg.recordedVariables = task.config.variables;
+          cfg.recordedVariableOrder = task.config.variableOrder;
         }
         return json(start(cfg, task, data.mode === "all"));
       }

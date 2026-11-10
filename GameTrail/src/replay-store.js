@@ -73,8 +73,8 @@ class ReplayStore {
   variables(id) {
     const row = this.db.prepare("SELECT config FROM tasks WHERE id=?").get(id);
     if (!row) throw Error("重放任务不存在");
-    const {template, variables, primaryVariable} = JSON.parse(row.config);
-    return {template, variables, primaryVariable:primaryVariable ?? (template.includes("{gameId}") ? "gameId" : "")};
+    const {template, variables, variableOrder, primaryVariable} = JSON.parse(row.config);
+    return {template, variables, variableOrder, primaryVariable:primaryVariable ?? (template.includes("{gameId}") ? "gameId" : "")};
   }
   rename(id, name) {
     if (typeof name !== "string" || !name.trim() || name.trim().length > 120)

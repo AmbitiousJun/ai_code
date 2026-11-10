@@ -244,7 +244,7 @@ test("隔离变量优先分组，无 GET 分支和防连续点击，跨语言重
   const cfg = { ...defaults, template: "http://127.0.0.1:" + server.address().port + "/?lang={lang}&game={game}",
     primaryVariable: "game", variables: {lang:["zh","en"], game:["a","b"]}, actions: 3, waitSeconds: 1 };
   const rows = plan(cfg);
-  assert.deepEqual(rows.map(r => [r.group, r.phase]), [["a","discover"],["a","replay"],["a","replay"],["b","discover"],["b","replay"],["b","replay"]]);
+  assert.deepEqual(rows.map(r => [r.group, r.phase]), [["a","discover"],["a","replay"],["b","discover"],["b","replay"],["a","replay"],["b","replay"]]);
   assert.throws(() => plan({...cfg, primaryVariable:"absent"}));
   for (const group of ["a","b"]) {
     const paths = [];

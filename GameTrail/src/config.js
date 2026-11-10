@@ -22,16 +22,19 @@ const defaults = {
   pixelSimilarity: 94,
   actions: 8,
 };
-function plan(input) {
+function plan(input, legacyOrder = false) {
   const cfg = { ...defaults, ...input };
-  const keys = [
+  const placeholders = [
     ...new Set([...cfg.template.matchAll(/\{([\w-]+)\}/g)].map((m) => m[1])),
   ];
   if (/[{}]/.test(cfg.template.replace(/\{[\w-]+\}/g, "")))
     throw Error("模板占位符格式无效");
-  const primary = cfg.primaryVariable ?? (keys.includes("gameId") ? "gameId" : "");
-  if (primary && !keys.includes(primary)) throw Error("主隔离变量必须是模板中的占位符");
-  if (primary) keys.unshift(...keys.splice(keys.indexOf(primary), 1));
+  const primary = cfg.primaryVariable ?? (placeholders.includes("gameId") ? "gameId" : "");
+  if (primary && !placeholders.includes(primary)) throw Error("主隔离变量必须是模板中的占位符");
+  const order = cfg.variableOrder ?? Object.keys(cfg.variables);
+  if (!Array.isArray(order)) throw Error("模板变量顺序无效");
+  const keys = legacyOrder ? placeholders : [...new Set([...order, ...placeholders])].filter(key => placeholders.includes(key));
+  if (legacyOrder && primary) keys.unshift(...keys.splice(keys.indexOf(primary), 1));
   const groups = new Set();
   let rows = [{}];
   for (const key of keys) {
@@ -89,6 +92,7 @@ function plan(input) {
     return selected.flatMap((device) => {
       const group = primary ? vars[primary] : String(groups.size + 1);
       const row = { url: u.href, vars, device, group, primary };
+      if (!legacyOrder && keys.length > 1) row.batch = vars[keys[0]];
       const discover = cfg.explore && cfg.actions > 0 && !groups.has(group);
       if (manual && !groups.has(group)) recordings.push({ ...row, phase: "record" });
       groups.add(group);

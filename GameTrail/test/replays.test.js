@@ -57,7 +57,7 @@ test("保存任务支持区分名称、重命名及批量删除，运行中的�
   } finally { store.db.close(); }
 });
 
-test("工作台保存录入结果，中断第二条路径后重启服务可续跑和全量重跑", {timeout:90000}, async t => {
+test("工作台保存录入结果，中断后续跑，全量重跑按语言分批并复用游戏路径", {timeout:150000}, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(),"gt-replay-"));
   const site = http.createServer((req,res) => res.end('<button id="go" style="position:fixed;inset:0;width:100%;height:100%">Go</button>'));
   await new Promise(resolve => site.listen(0,"127.0.0.1",resolve));
@@ -77,8 +77,8 @@ test("工作台保存录入结果，中断第二条路径后重启服务可续�
     assert.ok(res.ok, JSON.stringify(value));
     return value;
   }
-  async function until(check) {
-    const end = Date.now()+20000;
+  async function until(check, timeout = 20000) {
+    const end = Date.now()+timeout;
     while (Date.now()<end) {
       const job = (await api("state")).job;
       if (check(job)) return job;
@@ -107,7 +107,7 @@ test("工作台保存录入结果，中断第二条路径后重启服务可续�
   });
   await boot();
   await api("start",{template:"http://127.0.0.1:"+site.address().port+"/{gameId}?lang={lang}",
-    variables:{gameId:["demo"],lang:["en-US","fr-FR"]},waitSeconds:2,quietSeconds:0.15});
+    variables:{lang:["en-US","fr-FR"],gameId:["demo"]},waitSeconds:2,quietSeconds:0.15});
   await recordStep();
   await recordStep();
   await command("done");
@@ -121,16 +121,23 @@ test("工作台保存录入结果，中断第二条路径后重启服务可续�
   await closed;
   await boot();
   for (const mode of ["continue","all"]) {
-    const variables = {gameId:["demo"], lang:["de-DE"]};
-    const {id} = await api("replays/start",{id:saved.id, mode, ...(mode === "all" ? {variables} : {})});
-    const job = await until(j=>j?.id === id && j.status !== "running");
+    const variables = {gameId:["demo","extra"], lang:["de-DE","fr-FR"]};
+    const {id} = await api("replays/start",{id:saved.id, mode, ...(mode === "all" ? {variables,replayConcurrency:4} : {})});
+    const job = await until(j => {
+      if (j?.id !== id) return false;
+      if (mode === "all" && j.instances.some(instance => instance.run > 2))
+        assert.equal(j.runs.filter(row => row.vars.lang === "de-DE").length, 2);
+      return j.status !== "running";
+    }, 60000);
     assert.equal(job.status,"complete");
-    assert.equal(job.runs.length,mode === "all" ? 1 : 2);
+    assert.equal(job.runs.length,mode === "all" ? 4 : 2);
     if (mode === "all") {
-      assert.equal(job.runs[0].vars.lang,"de-DE");
+      const rows = job.runs.toSorted((a,b) => a.run - b.run);
+      assert.deepEqual(rows.map(r => [r.vars.lang,r.vars.gameId,r.replayedPaths]), [
+        ["de-DE","demo",2],["de-DE","extra",0],["fr-FR","demo",2],["fr-FR","extra",0]
+      ]);
       assert.deepEqual((await api("replays/config?id="+saved.id)).variables,variables);
-    } else assert.equal(job.runs[1].replayedPaths,2);
-    assert.equal(job.runs[0].replayedPaths, mode === "all" ? 2 : 1);
+    } else assert.deepEqual(job.runs.map(r => r.replayedPaths), [1,2]);
     const [updated] = await api("replays");
     assert.equal(updated.rowIndex,job.runs.length);
     assert.equal(updated.total,job.runs.length);

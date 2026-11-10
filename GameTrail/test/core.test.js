@@ -22,6 +22,16 @@ test("多变量与机型组合、转义和输入验证", () => {
   assert.match(r.url, /a%26b/);
   assert.throws(() => plan({ ...defaults, selected: [] }));
 });
+test("按配置行序回放，按游戏录入并兼容旧进度", () => {
+  const cfg = { ...defaults, variables: {gameId:["a","b"], lang:["fr","en"]}, variableOrder:["lang","gameId"] };
+  const rows = plan(cfg);
+  const labels = rows => rows.map(r => [r.group,r.vars.lang]);
+  assert.deepEqual(labels(rows.filter(r => r.phase === "record")), [["a","fr"],["b","fr"]]);
+  const replay = rows.filter(r => r.phase === "replay");
+  assert.deepEqual(labels(replay), [["a","fr"],["b","fr"],["a","en"],["b","en"]]);
+  assert.deepEqual(replay.map(r => r.batch), ["fr","fr","en","en"]);
+  assert.deepEqual(labels(plan(cfg, true).filter(r => r.phase === "replay")), [["a","fr"],["a","en"],["b","fr"],["b","en"]]);
+});
 test("超过 2000 个模板组合或设备运行时生成完整计划", () => {
   for (const [count, selected] of [[2001, ["win"]], [1001, ["win", "mac"]]]) {
     const gameId = Array.from({ length: count }, (_, i) => String(i + 1));

@@ -46,13 +46,16 @@ function replayConcurrency() {
   return input.value === "" ? null : input.valueAsNumber;
 }
 function config() {
-  const variables = {};
+  const variables = Object.create(null);
+  const variableOrder = [];
   for (const line of $("variables")
     .value.split("\n")
     .filter((x) => x.trim())) {
     const eq = line.indexOf("=");
     if (eq < 1) throw Error("变量格式示例：gameId=demo-a,demo-b");
-    variables[line.slice(0, eq).trim()] = line
+    const key = line.slice(0, eq).trim();
+    if (!Object.hasOwn(variables, key)) variableOrder.push(key);
+    variables[key] = line
       .slice(eq + 1)
       .split(/[,，]/)
       .map((x) => x.trim())
@@ -61,6 +64,7 @@ function config() {
   return {
     template: $("template").value.trim(),
     variables,
+    variableOrder,
     primaryVariable: $("primaryVariable").value.trim(),
     selected: selected(),
     replayConcurrency: replayConcurrency(),
@@ -367,7 +371,8 @@ async function editRerun(task) {
     : "按原变量组合和机型复用已录路径。") + "没有对应路径的环境只加载入口。开始后将重置此任务的进度。";
   $("rerunError").textContent = "";
   const keys = new Set([...saved.template.matchAll(/\{([\w-]+)\}/g)].map(match => match[1]));
-  for (const key of keys) {
+  for (const key of new Set([...(saved.variableOrder ?? Object.keys(saved.variables)), ...keys])) {
+    if (!keys.has(key)) continue;
     const label = create("label", key), input = create("textarea");
     input.name = key;
     input.rows = 3;
@@ -530,8 +535,8 @@ async function init() {
   const s = data.settings;
   for (const k of ["template", "waitSeconds", "quietSeconds", "pixelTimeout", "pixelSimilarity", "actions"])
     $(k).value = s[k] ?? (k === "quietSeconds" ? 1 : "");
-  $("variables").value = Object.entries(s.variables)
-    .map(([k, v]) => k + "=" + v.join(","))
+  $("variables").value = [...new Set([...(s.variableOrder ?? []), ...Object.keys(s.variables)])]
+    .filter(k => Object.hasOwn(s.variables,k)).map(k => k + "=" + s.variables[k].join(","))
     .join("\n");
   $("primaryVariable").value = s.primaryVariable ?? (s.template.includes("{gameId}") ? "gameId" : "");
   $("custom").value = JSON.stringify(s.custom, null, 2);
