@@ -53,11 +53,13 @@ class Cache {
     for (const { k } of this.db.prepare("SELECT k FROM items").all())
       this.drop(k);
   }
-  bypassReason(url, h) {
+  bypassReason(url, h, engine) {
     if (!this.cap) return "缓存容量为 0";
     if (h.authorization || h.range || Object.keys(h).some(k => k.startsWith("if-")))
       return "鉴权、范围或条件请求";
-    if (/no-cache/i.test(h.pragma || "") || /no-store|no-cache|max-age=0/i.test(h["cache-control"] || ""))
+    const control = h["cache-control"] || "";
+    if (/no-store/i.test(control) ||
+        (engine !== "webkit" && (/no-cache/i.test(h.pragma || "") || /no-cache|max-age=0/i.test(control))))
       return "请求要求回源";
     if (/[?&](?:token|ssokey|session|signature|access_token)=/i.test(url))
       return "URL 含凭据参数";

@@ -73,7 +73,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
   const browser = await browserType.launch(opts);
   const stop = () => browser.close().catch(() => {});
   signal.addEventListener("abort", stop, { once: true });
-  let audioGuard;
+  let audioGuard, ctx;
   try {
     signal.throwIfAborted();
     if (process.platform === "win32" && d.engine === "webkit") {
@@ -89,7 +89,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
     }
     const { id, name, engine, defaultBrowserType, ...device } = d;
     const locale = row.vars.lang || d.locale || "en-US";
-    const ctx = await browser.newContext({
+    ctx = await browser.newContext({
       ...device,
       locale,
       serviceWorkers: "block",
@@ -134,7 +134,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
         const req = route.request();
         if (req.method() === "GET" && reusable(req)) {
           const url = req.url(), headers = await req.allHeaders();
-          const cached = !cache.bypassReason(url, headers) && cache.get(cache.key(url));
+          const cached = !cache.bypassReason(url, headers, engine) && cache.get(cache.key(url));
           if (cached) {
             hits.add(req);
             await route.fulfill(cached);
@@ -201,7 +201,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
       track(
         (async () => {
           const requestHeaders = await req.allHeaders();
-          const bypass = cache.bypassReason(url, requestHeaders);
+          const bypass = cache.bypassReason(url, requestHeaders, engine);
           if (bypass) return decision("跳过缓存 · " + bypass);
           const headers = await r.allHeaders();
           const key = cache.key(url);
@@ -258,6 +258,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
     return { clicks, frames: observed.frames, uniqueGET: seen.size };
   } finally {
     signal.removeEventListener("abort", stop);
+    await ctx?.close().catch(() => {});
     await browser.close().catch(() => {});
     audioGuard?.kill();
     audioGuard = null;

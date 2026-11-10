@@ -452,7 +452,7 @@ async function refreshReplays(job) {
 }
 async function poll() {
   try {
-    const { job: j, cache: c, replayRevision } = await api("/api/state?after=" + seq);
+    const { job: j, cache: c, replayRevision } = await api("/api/state?compact=1&after=" + seq);
     $("usage").textContent =
       (c.bytes / 1048576).toFixed(1) +
       " MiB / " +

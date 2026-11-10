@@ -9,6 +9,26 @@ const { plan, defaults } = require("../src/config");
 const { Cache } = require("../src/cache");
 const { chromium } = require("playwright");
 
+test("手动回放立即检查下一回调，未就绪时重试并只成功调用一次", async () => {
+  const { replay } = require("../src/manual");
+  const calls = [];
+  let attempts = 0;
+  const frame = {evaluate: async (_, step) => {
+    if (step.name === "second" && ++attempts === 1) return false;
+    calls.push(step.name);
+    return true;
+  }};
+  const page = new (require("node:events").EventEmitter)();
+  page.mainFrame = () => frame;
+  const steps = ["first", "second"].map(name => ({ name, kind:"CocosBinding", route:[] }));
+  const active = new Set(["slow download"]);
+  await replay(page, {steps, frames:[]}, AbortSignal.timeout(3000), event => {
+    if (event.message.includes("第 2 步")) active.clear();
+  }, {active, paths:new Set(), lastGET:0, quietMs:0});
+  assert.equal(attempts, 2);
+  assert.deepEqual(calls, ["first", "second"]);
+});
+
 test("手动任务先录完两组，多路径从独立入口试播，无标识操作后继续录制，跳过组仍加载", async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(),"gt-manual-"));
   const cache = new Cache(dir);
@@ -80,7 +100,7 @@ test("手动任务先录完两组，多路径从独立入口试播，无标识�
           }
           await previewPage.evaluate(() => { window.previewMarker = "preview"; });
         }
-        if (command === "trial") { assert.equal(library.length,2); interruptTrial = true; }
+        if (command === "trial") { assert.equal(library.length,2,view.note); interruptTrial = true; }
         prompt.submit({token:prompt.view.token,action:command,index:1});
       }
       return pending;
@@ -93,6 +113,7 @@ test("手动任务先录完两组，多路径从独立入口试播，无标识�
         prompt.submit({token:prompt.view.token,action:"rerecord"});
       }
     },library,path.join(dir,"end.png"),fn => { capture = fn; },prompt);
+    assert.equal(browser.isConnected(), false, "环境结束后浏览器已关闭");
     if (row.phase === "replay") assert.equal(result.frames,row.group==="2"?3:0);
   }
   assert.deepEqual(groups.get("2").map(p=>p.steps[0].selector),["button[id=help]","button[id=bonus]"]);

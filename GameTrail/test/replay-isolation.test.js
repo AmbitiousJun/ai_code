@@ -74,8 +74,11 @@ test("Android 竖屏匹配超时时，并发实例持续回源，两个窗口仍
   const address = path.join(dir,"address");
   for (let i=0; i<250 && !fs.existsSync(address); i++) await delay(100);
   base = fs.readFileSync(address,"utf8").trim();
-  const version = (await (await fetch(base+"/api/config")).json()).version;
+  const {version, presets} = await (await fetch(base+"/api/config")).json();
   assert.equal(version,require("../package.json").version);
+  const android = presets.find(device => device.id === "android");
+  const iphone = presets.find(device => device.id === "ios");
+  for (const key of ["viewport", "screen", "deviceScaleFactor"]) assert.deepEqual(android[key], iphone[key]);
   const response = await post("/api/replays/start",{id,mode:"continue"});
   assert.equal(response.status,200);
   const jobId = (await response.json()).id;
@@ -99,6 +102,9 @@ test("Android 竖屏匹配超时时，并发实例持续回源，两个窗口仍
     await delay(100);
   }
   assert.equal(job.done,2);
+  const compact = (await (await fetch(base+"/api/state?compact=1")).json()).job;
+  assert.equal(compact.done, job.runs.length);
+  assert.equal(Object.hasOwn(compact, "runs"), false);
   assert.match(failure?.message || "",/等待唯一截图匹配超时/);
   assert.ok(fs.readFileSync(path.join(dir,"reports",jobId,failure.diagnostic),"utf8").includes("data:image/png;base64,"));
   const end = Date.parse(failure.time), start = end-4500;

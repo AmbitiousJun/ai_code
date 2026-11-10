@@ -287,11 +287,12 @@ async function body(req) {
   }
   return JSON.parse(raw || "{}");
 }
-function state(after) {
+function state(after, compact) {
   if (!current) return null;
-  const { events, success, ...s } = current;
+  const { events, success, runs, ...s } = current;
   return {
     ...s,
+    ...(compact ? {} : { runs }),
     success: success.size,
     events: events.filter((e) => e.seq > after).slice(0, 400),
   };
@@ -447,7 +448,7 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/state")
       return json({
         replayRevision,
-        job: state(Number(u.searchParams.get("after")) || 0),
+        job: state(Number(u.searchParams.get("after")) || 0, u.searchParams.has("compact")),
         cache: cache.stats(),
       });
     if (p === "/api/replays") return json(replayStore.list());

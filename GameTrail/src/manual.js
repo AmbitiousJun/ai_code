@@ -15,8 +15,9 @@ function frameKey(frame, lang) {
   return { path: address(frame.url(), lang) };
 }
 function sameKey(frame, key, lang) {
-  const actual = frameKey(frame, lang);
-  return key.name ? actual.name === key.name : actual.path === key.path;
+  // A newly attached frame can have an empty URL until its first navigation commits.
+  if (key.name) return frame.name() === key.name;
+  return !frame.name() && !!frame.url() && address(frame.url(), lang) === key.path;
 }
 function routeOf(frame, lang) {
   const route = [];
@@ -143,7 +144,8 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
       if (!ok && step.pixels) throw pixelFailure("第 "+(i+1)+" 步等待唯一截图匹配超时 · "+step.name+" · "+(!lastScan ? "未取得截图" : lastScan.interrupted ? "取得截图，扫描未在时限内完成" : maxCount>=2 ? "曾出现多个候选，最多 "+maxCount+" 个" : maxCount===1 ? "到时才找到目标" : "始终未找到达标目标"),lastScan,step.pixels,shot,emit);
       if (!ok) throw Error("第 " + (i + 1) + (step.pixels ? " 步等待唯一截图匹配超时 · " : " 步无法定位 · ") + step.name);
       emit({ kind: "action", message: "已调用第 " + (i + 1) + " 步 · " + step.name });
-      if (path.steps[i + 1]?.pixels) continue;
+      const next = path.steps[i + 1];
+      if (next && (next.pixels || next.kind === "CocosBinding" || next.kind === "DOMAction")) continue;
       const start = Date.now();
       while (observed.active.size || Date.now() - Math.max(start, observed.lastGET) < observed.quietMs) {
         if (Date.now() - start > 45000) throw Error("第 " + (i + 1) + " 步等待 GET 超时");

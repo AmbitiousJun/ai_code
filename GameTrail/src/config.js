@@ -7,7 +7,14 @@ const presets = [
   ["ios-wide", "iPhone · 横屏", "iPhone 13 landscape", "webkit"],
   ["android", "Android · 竖屏", "Pixel 7", "chromium"],
   ["android-wide", "Android · 横屏", "Pixel 7 landscape", "chromium"],
-].map(([id, name, model, engine]) => ({ id, name, engine, ...devices[model] }));
+].map(([id, name, model, engine]) => {
+  const device = { id, name, engine, ...devices[model] };
+  if (id === "android") {
+    const { viewport, screen, deviceScaleFactor } = devices["iPhone 13"];
+    Object.assign(device, { viewport, screen, deviceScaleFactor });
+  }
+  return device;
+});
 const defaults = {
   template:
     "https://game.example.invalid/play/{gameId}?lang={lang}",

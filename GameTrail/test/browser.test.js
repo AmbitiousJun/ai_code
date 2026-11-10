@@ -127,7 +127,6 @@ test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制"
   const assets = ["/sound.mp3", "/bundle.4dab3.zip", "/plain.zip", "/private.8052e.png"];
   const counts = new Map();
   const caches = [];
-  const forcedReloads = new Set();
   const server = http.createServer((req, res) => {
     if (req.url === "/") {
       res.setHeader("content-type", "text/html");
@@ -142,7 +141,6 @@ test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制"
         load();
       </script>`);
     }
-    if (req.headers["cache-control"]?.includes("no-cache")) forcedReloads.add(req.url);
     counts.set(req.url, (counts.get(req.url) || 0) + 1);
     if (req.url === assets[0]) res.setHeader("cache-control", "max-age=300");
     if (req.url === assets[3]) res.setHeader("cache-control", "no-store");
@@ -155,7 +153,6 @@ test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制"
     const cache = new Cache(path.join(dir, id));
     caches.push(cache);
     counts.clear();
-    forcedReloads.clear();
     const cfg = {...defaults, selected:[id], template:"http://127.0.0.1:" + server.address().port,
       explore:false, waitSeconds:2};
     const events = [];
@@ -163,7 +160,7 @@ test("重新载入时复用 fetch 游戏资源，遵守有效期和隐私限制"
       [], path.join(dir, id + ".png"));
     for (const [i, asset] of assets.entries()) {
       // Playwright's WebKit sends no-cache when request interception is active.
-      const expectHit = i < 2 && !(id === "ios" && forcedReloads.has(asset));
+      const expectHit = i < 2;
       assert.equal(counts.get(asset), expectHit ? 1 : 2, id + asset);
       assert.equal(events.some(e => e.url?.endsWith(asset) && e.source === "cache"), expectHit);
     }
