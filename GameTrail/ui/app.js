@@ -279,6 +279,7 @@ async function refreshFrame(card, key) {
     img.src = url;
     await img.decode();
     if (card.controller.signal.aborted) return;
+    card.time = Number(response.headers.get("X-Frame-Time"));
     card.frame.replaceChildren(img);
     if (card.url) URL.revokeObjectURL(card.url);
     card.url = url;
@@ -308,6 +309,7 @@ function updatePreview(job) {
         card = {el,caption,frame,controller:new AbortController(),next:0};
         previewCards.set(key,card);
       }
+      if (card.time) card.caption.textContent = "#" + instance.run + " · " + instance.title + " · 画面距今 " + Math.max(0,Math.floor((Date.now()-card.time)/1000)) + " 秒";
       if (!card.busy && Date.now() >= card.next) refreshFrame(card,key);
     }
   }

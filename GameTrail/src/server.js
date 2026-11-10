@@ -44,6 +44,7 @@ function openUi(url) {
   }
 }
 const cache = new Cache(path.join(root, "cache"));
+const {cachedPreview, capturePng} = require("./preview");
 const previews = new Map();
 let current = null,
   ctrl = null;
@@ -178,7 +179,7 @@ function start(cfg, saved, full = false) {
         };
       }
       const extraArgs = isManual ? [manualPrompt, checkpoint] : [];
-      const capturePreview = capture => { previews.set(run, { jobId: id, run, capture }); };
+      const capturePreview = capture => { previews.set(run, { jobId: id, run, read:cachedPreview(capture) }); };
       try {
         Object.assign(
           summary,
@@ -401,7 +402,7 @@ const server = http.createServer(async (req, res) => {
       const page = prompt?.recordPage;
       if (!page || !prompt.view?.session || prompt.view.token !== u.searchParams.get("token"))
         return json({error:"录制已结束"}, 409);
-      const image = await page.screenshot({type:"png", scale:"css", timeout:3000});
+      const image = await capturePng(page, 3000);
       if (prompt.recordPage !== page) return json({error:"录制已结束"}, 409);
       res.writeHead(200, {"Content-Type":"image/png","Cache-Control":"no-store"});
       return res.end(image);
@@ -416,14 +417,15 @@ const server = http.createServer(async (req, res) => {
       const run = Number(u.searchParams.get("run"));
       const frame = previews.get(run);
       const matches = frame && frame.jobId === u.searchParams.get("job");
-      const jpeg = matches && await frame.capture();
+      const recording = manualPrompt?.view?.session && u.searchParams.get("session") === manualPrompt.view.session;
+      const jpeg = matches && !ctrl.signal.aborted && frame.read(recording ? 100 : 1000);
       res.setHeader("Cache-Control", "no-store");
       if (!jpeg || frame !== previews.get(run) || ctrl.signal.aborted) {
         res.writeHead(204);
         return res.end();
       }
-      res.writeHead(200, { "Content-Type": "image/jpeg" });
-      return res.end(jpeg);
+      res.writeHead(200, { "Content-Type": "image/jpeg", "X-Frame-Time": String(jpeg.time) });
+      return res.end(jpeg.bytes);
     }
     if (p === "/api/config") {
       return json({

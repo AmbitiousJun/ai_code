@@ -1,6 +1,7 @@
 // Match a user-selected 20 × 20 RGB thumbnail against the current viewport.
 // Candidate positions are discovered from the current image on every replay.
-const { PNG } = require("playwright-core/lib/utilsBundle");
+const {capturePng} = require("./preview");
+const {scanInWorker} = require("./pixel-pool");
 const side = 20;
 function prepare(template) {
   const rgb = Buffer.from(template.rgb || "", "base64");
@@ -76,8 +77,7 @@ function match(image, template, similarity) {
 async function screenshot(page, timeout) {
   const view = page.viewportSize();
   if (!view || view.width*view.height>8_500_000) throw Error("当前视口过大，无法进行像素匹配");
-  const bytes = await page.screenshot({type:"png",scale:"css",timeout});
-  return PNG.sync.read(bytes);
+  return capturePng(page, timeout);
 }
 async function gameArea(canvas) {
   const bounds = await canvas.boundingBox({timeout:500});
@@ -94,17 +94,21 @@ async function gameArea(canvas) {
   return {x:bounds.x+left*bounds.width,y:bounds.y+top*bounds.height,
     width:bounds.width*(Math.min(1,vp.x+vp.w)-left),height:bounds.height*(Math.min(1,vp.y+vp.h)-top)};
 }
-async function locatePixels(page, template, similarity, timeout = 3000) {
-  if (template.side === 32) {
-    const {hits} = await scanPixels(page,template,similarity,timeout);
-    return hits.length===1 ? hits[0] : null;
+async function locatePixels(page, template, similarity, timeout = 3000, signal) {
+  const bytes = await screenshot(page, timeout);
+  const result = await scanInWorker({bytes, template, similarity, locate:true}, signal);
+  if (template.side !== 32) return result.point;
+  return result.hits.length === 1 ? result.hits[0] : null;
+}
+async function scanPixels(page, template, similarity, timeout, gameScale, signal) {
+  const bytes = await screenshot(page, timeout);
+  const image = {bytes, width:bytes.readUInt32BE(16), height:bytes.readUInt32BE(20)};
+  try {
+    const result = await scanInWorker({bytes, template, similarity, gameScale}, signal);
+    return {...result, image};
+  } catch (error) {
+    if (signal?.aborted && error.name === "TimeoutError") return {image, hits:[], interrupted:true};
+    throw error;
   }
-  return match(await screenshot(page, timeout), template, similarity);
 }
-async function scanPixels(page, template, similarity, timeout, gameScale) {
-  const image = await screenshot(page, timeout);
-  if (template.side === 32) return {...require("./visual-match").scan(image,template,similarity,gameScale),image};
-  const hits = candidates(image, template, similarity, true);
-  return {hits,image,best:hits.slice().sort((a,b)=>a.score-b.score)[0]};
-}
-module.exports = { locatePixels, scanPixels, match, gameArea };
+module.exports = { locatePixels, scanPixels, match, candidates, gameArea };

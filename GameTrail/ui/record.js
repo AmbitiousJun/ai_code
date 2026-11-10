@@ -28,7 +28,7 @@ async function watch() {
         finish.disabled = busy || selecting;
         discard.disabled = busy;
         if (selecting) { await new Promise(r => setTimeout(r,100)); continue; }
-        const response = await fetch("/api/preview?job=" + state.job + "&run=" + state.run);
+        const response = await fetch("/api/preview?job=" + state.job + "&run=" + state.run + "&session=" + encodeURIComponent(session));
         if (response.status === 200) {
           const next = URL.createObjectURL(await response.blob());
           const img = new Image();

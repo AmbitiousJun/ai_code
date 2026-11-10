@@ -54,7 +54,6 @@ function pixelFailure(message,scan,template,shot,emit) {
     message += " · 最佳采样候选 " + (100*(1-p.score/255)).toFixed(1)+"%，倍率 "+(p.w/template.width).toFixed(2);
   }
   if (shot && scan) {
-    const { PNG } = require("playwright-core/lib/utilsBundle");
     const fs = require("node:fs"), path = require("node:path");
     const file = "match-"+randomUUID()+".svg";
     const {image,hits,best} = scan;
@@ -63,7 +62,7 @@ function pixelFailure(message,scan,template,shot,emit) {
       const label = (100*(1-p.score/255)).toFixed(1)+"% / "+(p.w/template.width).toFixed(2)+"x";
       return '<rect x="'+x+'" y="'+y+'" width="'+p.w+'" height="'+p.h+'" fill="none" stroke="#ffbf00" stroke-width="3"/><text x="'+Math.min(x,image.width-85)+'" y="'+Math.max(16,y-3)+'" fill="white" stroke="black" paint-order="stroke" stroke-width="3">'+label+'</text>';
     });
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+image.width+'" height="'+image.height+'"><image width="100%" height="100%" href="data:image/png;base64,'+PNG.sync.write(image).toString("base64")+'"/>'+marks.join("")+'</svg>';
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+image.width+'" height="'+image.height+'"><image width="100%" height="100%" href="data:image/png;base64,'+image.bytes.toString("base64")+'"/>'+marks.join("")+'</svg>';
     fs.writeFileSync(path.join(path.dirname(shot),file),svg);
     emit({kind:"action",message,diagnostic:file});
   }
@@ -89,6 +88,7 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
       const started = Date.now();
       let threshold = cfg.pixelSimilarity ?? defaults.pixelSimilarity, previousCount;
       const until = started + (step.pixels ? cfg.pixelTimeout ?? defaults.pixelTimeout : 15) * 1000;
+      const scanSignal = step.pixels && AbortSignal.any([signal, AbortSignal.timeout(until - started)]);
       let ok = false, lastScan, maxCount = 0;
       observed.paths.clear();
       while (!ok && Date.now() < until) {
@@ -100,10 +100,11 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
           const canvas = game && resolveFrame(page,game.route,lang)?.locator("canvas").nth(game.index);
           const box = canvas && await gameArea(canvas).catch(()=>null);
           const scale = box ? [box.width/game.width,box.height/game.height] : [];
-          const scan = await scanPixels(page, step.pixels, minimum, timeout, scale)
+          const scan = await scanPixels(page, step.pixels, minimum, timeout, scale, scanSignal)
             .catch(err => { if (err.name !== "TimeoutError") throw err; });
           signal.throwIfAborted();
           const hits = scan?.hits;
+          if (scan?.interrupted) { lastScan ||= scan; break; }
           if (scan) { lastScan = scan; maxCount = Math.max(maxCount,hits.length); }
           if (Date.now() >= until) break;
           if (hits) {
@@ -139,7 +140,7 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
         }
         if (!ok) await delay(Math.max(0, Math.min(200, until - Date.now())), undefined, { signal });
       }
-      if (!ok && step.pixels) throw pixelFailure("第 "+(i+1)+" 步等待唯一截图匹配超时 · "+step.name+" · "+(!lastScan ? "未取得截图" : maxCount>=2 ? "曾出现多个候选，最多 "+maxCount+" 个" : maxCount===1 ? "到时才找到目标" : "始终未找到达标目标"),lastScan,step.pixels,shot,emit);
+      if (!ok && step.pixels) throw pixelFailure("第 "+(i+1)+" 步等待唯一截图匹配超时 · "+step.name+" · "+(!lastScan ? "未取得截图" : lastScan.interrupted ? "取得截图，扫描未在时限内完成" : maxCount>=2 ? "曾出现多个候选，最多 "+maxCount+" 个" : maxCount===1 ? "到时才找到目标" : "始终未找到达标目标"),lastScan,step.pixels,shot,emit);
       if (!ok) throw Error("第 " + (i + 1) + (step.pixels ? " 步等待唯一截图匹配超时 · " : " 步无法定位 · ") + step.name);
       emit({ kind: "action", message: "已调用第 " + (i + 1) + " 步 · " + step.name });
       if (path.steps[i + 1]?.pixels) continue;
@@ -319,7 +320,7 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
           prompt.recordPixels = async template => {
             if (draft.steps.length >= 100) throw Error("单条路径最多 100 个动作");
             if (template.side === 32) await rememberCanvas(page,template,lang);
-            const point = await locatePixels(page, template, cfg.pixelSimilarity);
+            const point = await locatePixels(page, template, cfg.pixelSimilarity, 3000, runSignal);
             if (!point) throw Error("无法唯一匹配选区，请框入更有辨识度的完整图案");
             const wasPaused = prompt.view.paused;
             prompt.view.paused = false;
