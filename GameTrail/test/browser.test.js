@@ -30,6 +30,7 @@ test("浏览器初始化时静音 Chromium 和 WebKit 子 frame", async (t) => {
           const session = await page.context().newCDPSession(page);
           const command = await session.send("Browser.getBrowserCommandLine");
           assert.ok(command.arguments.includes("--mute-audio"));
+          if (process.platform === "win32") assert.ok(command.arguments.includes("--headless=new"));
         } else {
           const audio = page.frameLocator("iframe").locator("audio");
           assert.equal(await audio.evaluate(element => {

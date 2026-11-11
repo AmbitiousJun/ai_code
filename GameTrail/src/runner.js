@@ -1,4 +1,6 @@
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= "0";
+// Playwright 1.48 defaults to old headless, which uses SwiftShader for WebGL on Windows.
+if (process.platform === "win32") process.env.PLAYWRIGHT_CHROMIUM_USE_HEADLESS_NEW = "1";
 const pw = require("playwright"),
   fs = require("node:fs"),
   path = require("node:path");
