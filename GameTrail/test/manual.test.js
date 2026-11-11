@@ -223,7 +223,7 @@ test("Android 截图回放识别遮罩拦截，重新定位齿轮且仅重试一
     const events=[];
     const play = steps => replay(page,{steps,frames:[]},new AbortController().signal,e=>events.push(e),
       {active:new Set(),paths:new Set(),lastGET:0,quietMs:0,hasTouch:true},"",
-      {pixelTimeout:15,pixelSimilarity:100});
+      {pixelTimeout:15,pixelSimilarity:96});
     await play(steps).catch(async error => {
       assert.fail(error.message + " · " + JSON.stringify(events) + " · " + JSON.stringify(await page.evaluate(()=>window.inputs)));
     });

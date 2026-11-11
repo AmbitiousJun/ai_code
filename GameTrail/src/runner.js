@@ -60,7 +60,7 @@ function muteWebKit() {
     };
   }
 }
-const {capturingPng} = require("./preview");
+const {capturingMatchFrame} = require("./preview");
 async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewReady, manual) {
   const { device: d } = row;
   const opts = { headless: true };
@@ -228,7 +228,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
       let pendingFrame;
       onPreviewReady(() => {
         const target = manual?.previewMain ? page : ctx.pages().at(-1);
-        if (!target || target.isClosed() || signal.aborted || capturingPng(target)) return null;
+        if (!target || target.isClosed() || signal.aborted || capturingMatchFrame(target)) return null;
         pendingFrame ||= target.screenshot({
           type: "jpeg", quality: 60, scale: "css", timeout: 1800,
         }).catch(() => null).finally(() => { pendingFrame = null; });

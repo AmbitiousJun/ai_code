@@ -1,9 +1,9 @@
 const priorityCaptures = new WeakMap();
 
-async function capturePng(page, timeout) {
+async function captureMatchFrame(page, timeout) {
   priorityCaptures.set(page, (priorityCaptures.get(page) || 0) + 1);
   try {
-    return await page.screenshot({type:"png", scale:"css", timeout});
+    return await page.screenshot({type:"jpeg", quality:95, scale:"css", timeout});
   } finally {
     const left = priorityCaptures.get(page) - 1;
     if (left) priorityCaptures.set(page, left);
@@ -26,5 +26,5 @@ function cachedPreview(capture) {
     return latest;
   };
 }
-function capturingPng(page) { return priorityCaptures.has(page); }
-module.exports = {cachedPreview, capturePng, capturingPng};
+function capturingMatchFrame(page) { return priorityCaptures.has(page); }
+module.exports = {cachedPreview, captureMatchFrame, capturingMatchFrame};

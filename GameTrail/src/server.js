@@ -44,7 +44,7 @@ function openUi(url) {
   }
 }
 const cache = new Cache(path.join(root, "cache"));
-const {cachedPreview, capturePng} = require("./preview");
+const {cachedPreview, captureMatchFrame} = require("./preview");
 const previews = new Map();
 let current = null,
   ctrl = null;
@@ -411,9 +411,9 @@ const server = http.createServer(async (req, res) => {
       const page = prompt?.recordPage;
       if (!page || !prompt.view?.session || prompt.view.token !== u.searchParams.get("token"))
         return json({error:"录制已结束"}, 409);
-      const image = await capturePng(page, 3000);
+      const image = await captureMatchFrame(page, 3000);
       if (prompt.recordPage !== page) return json({error:"录制已结束"}, 409);
-      res.writeHead(200, {"Content-Type":"image/png","Cache-Control":"no-store"});
+      res.writeHead(200, {"Content-Type":"image/jpeg","Cache-Control":"no-store"});
       return res.end(image);
     }
     if (p === "/api/record-state") {

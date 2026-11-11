@@ -274,3 +274,50 @@ main > section { min-width:0; }
 #rerunDialog { width: min(460px, 94vw); border: 1px solid #bac7bc; border-radius: 10px; color: inherit; }
 #rerunDialog::backdrop { background: #123d3655; }
 #rerunError { color: #963c28; }
+#primaryVariable { display:block; width:100%; margin:5px 0 4px; }
+.modeField { margin:12px 0; }
+.modeField label { margin:0 0 5px; }
+.picker { position:relative; }
+.picker > button {
+  position:relative; display:block; width:100%; text-align:left;
+  background:#f7faf5; color:#244c3e; border:1px solid #b9cbbb;
+  font:inherit; padding:7px 34px 7px 12px; border-radius:8px;
+}
+.picker > button::after {
+  content:""; position:absolute; right:13px; top:50%; width:7px; height:7px;
+  border:solid currentColor; border-width:0 1.5px 1.5px 0;
+  transform:translateY(-65%) rotate(45deg);
+}
+.picker > button[aria-expanded="true"]::after { transform:translateY(-25%) rotate(225deg); }
+.picker [role="listbox"] {
+  position:absolute; z-index:5; top:calc(100% + 4px); right:0; min-width:100%;
+  padding:4px; border:1px solid #c6d6c7; border-radius:9px; background:white;
+  box-shadow:0 6px 18px #173d3226;
+}
+.picker [role="option"] {
+  display:block; width:100%; text-align:left; white-space:nowrap; font:inherit;
+  background:white; color:#264c3e; padding:6px 10px;
+}
+.picker [role="option"][aria-selected="true"] { background:#deeddf; font-weight:600; }
+.picker [role="option"]:hover, .picker [role="option"]:focus { background:#edf4ea; outline:1px solid #89aa91; }
+.sectiontitle .picker { min-width:9.5em; }
+.progressTrack {
+  position:relative; overflow:hidden; height:9px; margin:17px 0 8px;
+  background:#dce6da; border-radius:10px; box-shadow:inset 0 1px 2px #153a3019;
+}
+.progressTrack progress { position:absolute; width:1px; height:1px; opacity:0; }
+.progressTrack span {
+  position:relative; display:block; overflow:hidden; width:var(--done, 0%);
+  height:100%; border-radius:inherit; background:linear-gradient(90deg,#216249,#65a770);
+  transition:width .45s ease-out;
+}
+.progressTrack.running span::after {
+  content:""; position:absolute; inset:0;
+  background:linear-gradient(100deg,transparent 30%,#f4ffdf66 50%,transparent 70%);
+  animation:progressSweep 2.4s ease-in-out infinite;
+}
+@keyframes progressSweep { from { transform:translateX(-100%); } to { transform:translateX(100%); } }
+@media (prefers-reduced-motion:reduce) {
+  .progressTrack span { transition:none; }
+  .progressTrack.running span::after { animation:none; background:none; }
+}

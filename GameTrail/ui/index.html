@@ -68,11 +68,11 @@
             type="checkbox"
           />开启探索与重放</label
         >
-        <label>探索方式<select id="exploreMode">
+        <div class="modeField"><label for="exploreMode-trigger">探索方式</label><select id="exploreMode">
           <option value="manual">手动录入特殊路径，再批量重放</option>
           <option value="source">分析源码，直接调用 iframe 函数</option>
           <option value="buttons">按按钮深度优先探索</option>
-        </select></label>
+        </select></div>
         <p id="estimate"></p>
         <button id="start">启动任务</button>
         <button type="button" class="secondary" id="stop" disabled>停止</button>
@@ -112,7 +112,7 @@
           <small>请求异常次数</small><strong id="errors">0</strong>
         </article>
       </div>
-      <progress id="progress" max="1" value="0"></progress>
+      <div class="progressTrack"><progress id="progress" aria-label="任务进度" max="1" value="0"></progress><span aria-hidden="true"></span></div>
       <p id="active">等待任务启动</p>
       <p id="paths"></p>
       <section id="manual" hidden aria-label="手动路径录入">
@@ -126,7 +126,7 @@
       </details>
       <div class="sectiontitle">
         <h2>请求时间线</h2>
-        <select id="filter">
+        <select id="filter" aria-label="事件筛选">
           <option value="">全部事件</option>
           <option value="bad">异常</option>
           <option value="action">探索动作</option>

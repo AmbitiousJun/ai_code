@@ -7,7 +7,7 @@ const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const {setTimeout: delay} = require("node:timers/promises");
-const {PNG} = require("playwright-core/lib/utilsBundle");
+const {PNG, jpegjs} = require("playwright-core/lib/utilsBundle");
 const {replay} = require("../src/manual");
 const {ReplayStore} = require("../src/replay-store");
 
@@ -25,7 +25,7 @@ test("降阈值后唯一目标点击，两个目标继续等待，三个目标�
       for (let c=0;c<3;c++) img.data[offset+c] = rgb[i*3+c]+2;
       img.data[offset+3] = 255;
     }
-    const bytes = PNG.sync.write(img), page = new EventEmitter();
+    const bytes = jpegjs.encode(img,100).data, page = new EventEmitter();
     let scans = 0, clicks = 0;
     page.viewportSize = () => ({width:img.width,height:img.height});
     page.screenshot = async () => { now += ++scans === 1 ? 10000 : 1000; return bytes; };

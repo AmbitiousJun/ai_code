@@ -24,7 +24,7 @@ async function watch() {
         pause.textContent = paused ? "继续录入" : "暂停录入";
         pause.disabled = busy || selecting;
         pick.disabled = busy || !objectUrl;
-        statusText.textContent = selecting && !frozen ? "正在获取无损画面…" : selecting ? "拖框选中完整按钮，松开即录入并点击。Esc 取消。" : message || state.note;
+        statusText.textContent = selecting && !frozen ? "正在冻结画面…" : selecting ? "拖框选中完整按钮，松开即录入并点击。Esc 取消。" : message || state.note;
         finish.disabled = busy || selecting;
         discard.disabled = busy;
         if (selecting) { await new Promise(r => setTimeout(r,100)); continue; }

@@ -497,6 +497,9 @@ async function poll() {
       }[j.status];
       $("progress").max = j.total;
       $("progress").value = j.done;
+      const track = $("progress").parentElement;
+      track.style.setProperty("--done", Math.min(100, 100 * j.done / Math.max(1, j.total)) + "%");
+      track.classList.toggle("running", j.status === "running");
       $("stop").disabled = j.status !== "running";
       $("start").disabled = j.status === "running";
       if (j.status !== lastStatus && j.status !== "running") {
@@ -511,6 +514,74 @@ async function poll() {
     if ($("status")) setTimeout(poll, 600);
   }
 }
+function themedSelect(select) {
+  const wrap = document.createElement("div");
+  wrap.className = "picker";
+  select.after(wrap);
+  select.hidden = true;
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.id = select.id + "-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+  const label = select.getAttribute("aria-label") || "探索方式";
+  const menu = document.createElement("div");
+  menu.id = select.id + "-menu";
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-label", label);
+  trigger.setAttribute("aria-controls", menu.id);
+  menu.hidden = true;
+  wrap.append(trigger, menu);
+  function close() {
+    menu.hidden = true;
+    trigger.setAttribute("aria-expanded", "false");
+  }
+  function open() {
+    menu.hidden = false;
+    trigger.setAttribute("aria-expanded", "true");
+    menu.children[select.selectedIndex].focus();
+  }
+  function sync() {
+    trigger.textContent = select.selectedOptions[0].text;
+    trigger.setAttribute("aria-label", label + "，" + trigger.textContent);
+    Array.from(menu.children).forEach((item, index) =>
+      item.setAttribute("aria-selected", String(index === select.selectedIndex)));
+  }
+  for (const option of select.options) {
+    const item = document.createElement("button");
+    item.type = "button";
+    item.tabIndex = -1;
+    item.setAttribute("role", "option");
+    item.textContent = option.text;
+    item.onclick = () => {
+      select.value = option.value;
+      select.dispatchEvent(new Event("input", {bubbles:true}));
+      select.dispatchEvent(new Event("change", {bubbles:true}));
+      close();
+      trigger.focus();
+    };
+    menu.append(item);
+  }
+  select.addEventListener("change", sync);
+  sync();
+  trigger.onclick = () => menu.hidden ? open() : close();
+  wrap.onkeydown = e => {
+    if (e.key === "Escape" && !menu.hidden) {
+      close();
+      trigger.focus();
+    } else if (["ArrowDown","ArrowUp","Home","End"].includes(e.key)) {
+      e.preventDefault();
+      if (menu.hidden) return open();
+      const items = Array.from(menu.children), current = items.indexOf(document.activeElement);
+      const index = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 :
+        (current + (e.key === "ArrowUp" ? -1 : 1) + items.length) % items.length;
+      items[index].focus();
+    }
+  };
+  wrap.onfocusout = e => { if (!wrap.contains(e.relatedTarget)) close(); };
+  document.addEventListener("pointerdown", e => { if (!wrap.contains(e.target)) close(); });
+}
+
 async function init() {
   const data = await api("/api/config");
   $("version").textContent = "v" + data.version;
@@ -543,6 +614,7 @@ async function init() {
   $("explore").checked = s.explore;
   $("exploreMode").value = s.exploreMode || "manual";
   $("replayConcurrency").value = s.replayConcurrency ?? "";
+  for (const select of document.querySelectorAll("select")) themedSelect(select);
   devices(s.selected);
   $("custom").onchange = () => {
     try {

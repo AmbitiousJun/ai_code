@@ -1,11 +1,11 @@
 const {parentPort} = require("node:worker_threads");
-const {PNG} = require("playwright-core/lib/utilsBundle");
+const {jpegjs} = require("playwright-core/lib/utilsBundle");
 const {candidates, match} = require("./pixel-button");
 const {scan} = require("./visual-match");
 
 parentPort.on("message", ({bytes, template, similarity, gameScale, locate}) => {
   try {
-    const image = PNG.sync.read(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+    const image = jpegjs.decode(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
     let result;
     if (template.side === 32) result = scan(image, template, similarity, gameScale);
     else if (locate) result = {point:match(image, template, similarity)};

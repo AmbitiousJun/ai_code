@@ -63,7 +63,7 @@ function pixelFailure(message,scan,template,shot,emit) {
       const label = (100*(1-p.score/255)).toFixed(1)+"% / "+(p.w/template.width).toFixed(2)+"x";
       return '<rect x="'+x+'" y="'+y+'" width="'+p.w+'" height="'+p.h+'" fill="none" stroke="#ffbf00" stroke-width="3"/><text x="'+Math.min(x,image.width-85)+'" y="'+Math.max(16,y-3)+'" fill="white" stroke="black" paint-order="stroke" stroke-width="3">'+label+'</text>';
     });
-    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+image.width+'" height="'+image.height+'"><image width="100%" height="100%" href="data:image/png;base64,'+image.bytes.toString("base64")+'"/>'+marks.join("")+'</svg>';
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="'+image.width+'" height="'+image.height+'"><image width="100%" height="100%" href="data:image/jpeg;base64,'+image.bytes.toString("base64")+'"/>'+marks.join("")+'</svg>';
     fs.writeFileSync(path.join(path.dirname(shot),file),svg);
     emit({kind:"action",message,diagnostic:file});
   }

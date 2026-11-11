@@ -1,3 +1,4 @@
+const {scanTiles} = require("./scan-tiles");
 // Match area-averaged luminance and colour at the same sampling resolution as the frozen crop.
 const SIDE = 32;
 const {PNG} = require("playwright-core/lib/utilsBundle");
@@ -95,33 +96,35 @@ function scan(image, template, minimum, gameScale = []) {
       return (0.8*error-0.22*Math.min(Math.abs(bias),indices.length*32)+colour/15)/indices.length;
     }
     const stride=Math.max(1,Math.min(6,Math.floor(Math.min(w,h)/12)));
-    for (let y=0;y<=height-h;y+=stride) for (let x=0;x<=width-w;x+=stride) {
-      const base=y*pitch+x;
-      let err=0;
-      for (const i of anchors) {
-        err+=Math.abs(light(base,i)-luma[i]);
-        if (err>(limit+36)*anchors.length && err>=nearestError) break;
+    for (const tile of scanTiles(image, template, w, h, stride)) {
+      for (let y=tile.top;y<=tile.bottom;y+=stride) for (let x=tile.left;x<=tile.right;x+=stride) {
+        const base=y*pitch+x;
+        let err=0;
+        for (const i of anchors) {
+          err+=Math.abs(light(base,i)-luma[i]);
+          if (err>(limit+36)*anchors.length && err>=nearestError) break;
+        }
+        if (err<nearestError) {
+          nearestError=err;
+          nearest={x:x+w/2,y:y+h/2,w,h,score:score(x,y,all)};
+        }
+        if (err>(limit+36)*anchors.length) continue;
+        if (score(x,y,coarse)>Math.max(limit+24,35)) continue;
+        let bx=x,by=y,local=Infinity;
+        for (let dy=0;dy<stride && y+dy<=height-h;dy++) for (let dx=0;dx<stride && x+dx<=width-w;dx++) {
+          const error=score(x+dx,y+dy,coarse);
+          if (error<local) {local=error;bx=x+dx;by=y+dy;}
+        }
+        if (local>Math.max(limit+12,25)) continue;
+        const error=0.8*score(bx,by,all)+0.2*score(bx,by,anchors);
+        const hit={x:bx+w/2,y:by+h/2,w,h,score:error};
+        if (!best || best.score>error) best=hit;
+        if (error>limit) continue;
+        const index=hits.findIndex(p=>Math.abs(p.x-hit.x)<Math.min(p.w,w)*0.4 && Math.abs(p.y-hit.y)<Math.min(p.h,h)*0.4);
+        if (index<0) hits.push(hit);
+        else if (error<hits[index].score) hits[index]=hit;
+        if (hits.length>=3) return {hits,best};
       }
-      if (err<nearestError) {
-        nearestError=err;
-        nearest={x:x+w/2,y:y+h/2,w,h,score:score(x,y,all)};
-      }
-      if (err>(limit+36)*anchors.length) continue;
-      if (score(x,y,coarse)>Math.max(limit+24,35)) continue;
-      let bx=x,by=y,local=Infinity;
-      for (let dy=0;dy<stride && y+dy<=height-h;dy++) for (let dx=0;dx<stride && x+dx<=width-w;dx++) {
-        const error=score(x+dx,y+dy,coarse);
-        if (error<local) {local=error;bx=x+dx;by=y+dy;}
-      }
-      if (local>Math.max(limit+12,25)) continue;
-      const error=0.8*score(bx,by,all)+0.2*score(bx,by,anchors);
-      const hit={x:bx+w/2,y:by+h/2,w,h,score:error};
-      if (!best || best.score>error) best=hit;
-      if (error>limit) continue;
-      const index=hits.findIndex(p=>Math.abs(p.x-hit.x)<Math.min(p.w,w)*0.4 && Math.abs(p.y-hit.y)<Math.min(p.h,h)*0.4);
-      if (index<0) hits.push(hit);
-      else if (error<hits[index].score) hits[index]=hit;
-      if (hits.length>=3) return {hits,best};
     }
   }
   return {hits,best:best || nearest};

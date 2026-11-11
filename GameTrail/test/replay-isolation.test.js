@@ -106,7 +106,7 @@ test("Android 竖屏匹配超时时，并发实例持续回源，两个窗口仍
   assert.equal(compact.done, job.runs.length);
   assert.equal(Object.hasOwn(compact, "runs"), false);
   assert.match(failure?.message || "",/等待唯一截图匹配超时/);
-  assert.ok(fs.readFileSync(path.join(dir,"reports",jobId,failure.diagnostic),"utf8").includes("data:image/png;base64,"));
+  assert.ok(fs.readFileSync(path.join(dir,"reports",jobId,failure.diagnostic),"utf8").includes("data:image/jpeg;base64,"));
   const end = Date.parse(failure.time), start = end-4500;
   for (const samples of [beats,polls,...frames]) {
     const within = samples.filter(t => t>=start && t<=end);

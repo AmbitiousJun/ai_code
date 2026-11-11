@@ -1,6 +1,7 @@
+const {scanTiles} = require("./scan-tiles");
 // Match a user-selected 20 × 20 RGB thumbnail against the current viewport.
 // Candidate positions are discovered from the current image on every replay.
-const {capturePng} = require("./preview");
+const {captureMatchFrame} = require("./preview");
 const {scanInWorker} = require("./pixel-pool");
 const side = 20;
 function prepare(template) {
@@ -46,25 +47,27 @@ function candidates(image, template, similarity = 94, uniqueOnly = false) {
       return Math.abs(data[p]-rgb[t])+Math.abs(data[p+1]-rgb[t+1])+Math.abs(data[p+2]-rgb[t+2]);
     }
     const stride = Math.max(1,Math.min(5,Math.floor(Math.min(w,h)/24)));
-    for (let y=0;y<=height-h;y+=stride) for (let x=0;x<=width-w;x+=stride) {
-      const base = 4*(y*width+x);
-      let misses = 0;
-      for (const i of anchors) {
-        if (diff(base,i)>anchorLimit && ++misses>2) break;
+    for (const tile of scanTiles(image, template, w, h, stride)) {
+      for (let y=tile.top;y<=tile.bottom;y+=stride) for (let x=tile.left;x<=tile.right;x+=stride) {
+        const base = 4*(y*width+x);
+        let misses = 0;
+        for (const i of anchors) {
+          if (diff(base,i)>anchorLimit && ++misses>2) break;
+        }
+        if (misses>2) continue;
+        let sum=0;
+        for (let i=0;i<side*side;i++) {
+          sum+=diff(base,i);
+          if (sum>maxSum) break;
+        }
+        if (sum>maxSum) continue;
+        const hit={x:x+w/2,y:y+h/2,w,h,score:sum/(side*side*3)};
+        const index=hits.findIndex(a => Math.abs(a.x-hit.x)<Math.min(a.w,w)*0.4 &&
+          Math.abs(a.y-hit.y)<Math.min(a.h,h)*0.4);
+        if (index<0) hits.push(hit);
+        else if (hit.score<hits[index].score) hits[index]=hit;
+        if (hits.length > 100 || (uniqueOnly && hits.length >= 3)) return hits;
       }
-      if (misses>2) continue;
-      let sum=0;
-      for (let i=0;i<side*side;i++) {
-        sum+=diff(base,i);
-        if (sum>maxSum) break;
-      }
-      if (sum>maxSum) continue;
-      const hit={x:x+w/2,y:y+h/2,w,h,score:sum/(side*side*3)};
-      const index=hits.findIndex(a => Math.abs(a.x-hit.x)<Math.min(a.w,w)*0.4 &&
-        Math.abs(a.y-hit.y)<Math.min(a.h,h)*0.4);
-      if (index<0) hits.push(hit);
-      else if (hit.score<hits[index].score) hits[index]=hit;
-      if (hits.length > 100 || (uniqueOnly && hits.length >= 3)) return hits;
     }
   }
   return hits;
@@ -77,7 +80,7 @@ function match(image, template, similarity) {
 async function screenshot(page, timeout) {
   const view = page.viewportSize();
   if (!view || view.width*view.height>8_500_000) throw Error("当前视口过大，无法进行像素匹配");
-  return capturePng(page, timeout);
+  return captureMatchFrame(page, timeout);
 }
 async function gameArea(canvas) {
   const bounds = await canvas.boundingBox({timeout:500});
@@ -102,7 +105,7 @@ async function locatePixels(page, template, similarity, timeout = 3000, signal) 
 }
 async function scanPixels(page, template, similarity, timeout, gameScale, signal) {
   const bytes = await screenshot(page, timeout);
-  const image = {bytes, width:bytes.readUInt32BE(16), height:bytes.readUInt32BE(20)};
+  const image = {bytes, ...page.viewportSize()};
   try {
     const result = await scanInWorker({bytes, template, similarity, gameScale}, signal);
     return {...result, image};
