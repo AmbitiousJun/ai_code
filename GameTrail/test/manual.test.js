@@ -241,41 +241,81 @@ test("无绑定 Cocos 触摸节点在子 frame 移位后以真实触屏操作重
   const {replay} = require("../src/manual");
   const browser = await chromium.launch();
   try {
-    const page = await browser.newPage({hasTouch:true,viewport:{width:640,height:480}});
+    const options = {hasTouch:true,viewport:{width:640,height:480}};
+    const page = await browser.newPage(options);
     const steps=[];
     await page.exposeBinding("__gtReport",(_,s)=>{ steps.push(s); });
-    async function scene(left) {
+    async function scene(page,left,separator,useUI=false) {
       await page.setContent('<iframe name="game" style="position:absolute;left:72px;top:31px;width:320px;height:220px"></iframe>');
       const frame=page.frame({name:"game"});
       await frame.setContent('<style>*{margin:0}</style><canvas width="300" height="200"></canvas>');
-      await frame.evaluate(left=>{
+      await frame.evaluate(({left,separator,useUI})=>{
         const canvas=document.querySelector("canvas");
         class Node {
-          dispatchEvent(event) { if (event.type==="touchend" && event.trusted) window.taps++; }
+          dispatchEvent(event) { if (event.type==="touch"+separator+"end" && event.trusted) window.taps++; }
         }
-        const target=Object.assign(new Node(),{name:"奖励",activeInHierarchy:true,
+        const target=Object.assign(new Node(),{name:"btn_comm",activeInHierarchy:true,
           getBoundingBoxToWorld:()=>({x:left,y:80,width:40,height:40})});
         const root={children:[target]};
         target.parent=root;
+        const plate=Object.assign(new Node(),{name:"SpinPlate",parent:root,activeInHierarchy:true,
+          getBoundingBoxToWorld:()=>({x:left,y:75,width:90,height:65})});
+        root.children.push(plate);
         window.cc={Node,game:{canvas},director:{getScene:()=>root},v2:(x,y)=>({x,y}),
           view:{getScaleX:()=>1,getScaleY:()=>1,getViewportRect:()=>({x:0,y:0,width:300,height:200})}};
+        if (useUI) {
+          delete target.getBoundingBoxToWorld;
+          target.getComponent = type => type === "cc.UITransform" ? {
+            contentSize:{width:20,height:20},anchorPoint:{x:0.25,y:0.75},
+            convertToWorldSpaceAR:p=>({x:p.x+5+left/2,y:p.y+15+40,z:2})
+          } : null;
+          cc.Vec3 = class { constructor(x=0,y=0,z=0) { Object.assign(this,{x,y,z}); } };
+          cc.director.root = {batcher2D:{getFirstRenderCamera:()=>({
+            worldToScreen:(out,p)=>Object.assign(out,{x:p.x*2,y:p.y*2})
+          })}};
+        }
         window.taps=0;
-        canvas.addEventListener("touchend",e=>{
+        for (const phase of ["start","end"]) canvas.addEventListener("touch"+phase,e=>{
           const t=e.changedTouches[0], r=canvas.getBoundingClientRect();
-          if (t.clientX-r.x>=left && t.clientX-r.x<=left+40 && Math.abs(t.clientY-r.y-100)<20)
-            target.dispatchEvent({type:"touchend",trusted:e.isTrusted});
+          if (t.clientX-r.x>=left && t.clientX-r.x<=left+40 && Math.abs(t.clientY-r.y-100)<20) {
+            target.dispatchEvent({type:"touch"+separator+phase,trusted:e.isTrusted});
+            if (useUI && phase==="start") target.dispatchEvent({type:"mouse-down"});
+            if (useUI && phase==="end") plate.dispatchEvent({type:"mouse-up"});
+          }
         });
-      },left);
+      },{left,separator,useUI});
       await frame.evaluate(installManualActions);
       return frame;
     }
-    let frame=await scene(44);
-    await frame.locator("canvas").tap({position:{x:55,y:96}});
-    await page.waitForTimeout(250);
-    assert.equal(steps.length,1);
-    assert.equal(steps[0].kind,"CocosTouch");
-    frame=await scene(201);
-    await replay(page,{steps:[{...steps[0],route:[{name:"game"}]}],frames:[]},new AbortController().signal,
+    for (const [separator,useUI] of [["",false],["-",false],["-",true]]) {
+      steps.length=0;
+      const frame=await scene(page,44,separator,useUI);
+      await frame.locator("canvas").tap({position:{x:55,y:96}});
+      await page.waitForTimeout(250);
+      assert.equal(steps.length,1);
+      assert.equal(steps[0].kind,"CocosTouch");
+      assert.deepEqual(steps[0].path,["btn_comm"]);
+      assert.ok(Math.abs(steps[0].x-11/40)<0.001 && Math.abs(steps[0].y-16/40)<0.001);
+    }
+    const replayPage=await browser.newPage(options);
+    const frame=await scene(replayPage,201,"-",true);
+    // Model a locator timeout after the game has already handled the gesture.
+    const locator = frame.locator.bind(frame);
+    frame.locator = selector => {
+      const canvases = locator(selector);
+      const nth = canvases.nth.bind(canvases);
+      canvases.nth = index => {
+        const canvas = nth(index);
+        const tap = canvas.tap.bind(canvas);
+        canvas.tap = async options => {
+          await tap(options);
+          throw Object.assign(Error("post-input timeout"),{name:"TimeoutError"});
+        };
+        return canvas;
+      };
+      return canvases;
+    };
+    await replay(replayPage,{steps:[{...steps[0],route:[{name:"game"}]}],frames:[]},new AbortController().signal,
       ()=>{}, {active:new Set(),paths:new Set(),lastGET:0,quietMs:0,hasTouch:true},"");
     assert.equal(await frame.evaluate(()=>window.taps),1);
   } finally { await browser.close(); }

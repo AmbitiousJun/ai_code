@@ -20,12 +20,22 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = Join-Path $build 'runtime.zip'
     [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip)
-    $exe = Join-Path $build 'GameTrail.exe'
+    $version = [version]((Get-Content -LiteralPath package.json -Raw | ConvertFrom-Json).version)
+    $exe = Join-Path $build "GameTrail-$version.exe"
+    $metadata = Join-Path $build 'Version.cs'
+    @"
+using System.Reflection;
+[assembly: AssemblyProduct("GameTrail")]
+[assembly: AssemblyTitle("GameTrail")]
+[assembly: AssemblyVersion("$version.0")]
+[assembly: AssemblyFileVersion("$version.0")]
+[assembly: AssemblyInformationalVersion("$version")]
+"@ | Set-Content -LiteralPath $metadata -Encoding UTF8
     $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-    & $compiler /nologo /target:winexe /platform:x64 /utf8output /codepage:65001 /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll "/resource:$zip,runtime.zip" "/out:$exe" (Join-Path $root 'native\launcher-windows.cs')
+    & $compiler /nologo /target:winexe /platform:x64 /utf8output /codepage:65001 /win32icon:native/GameTrail.ico /r:System.IO.Compression.dll /r:System.IO.Compression.FileSystem.dll "/resource:$zip,runtime.zip" "/out:$exe" $metadata (Join-Path $root 'native\launcher-windows.cs')
     if ($LASTEXITCODE) { throw 'Launcher compilation failed.' }
     New-Item -ItemType Directory -Path dist -Force | Out-Null
-    Copy-Item -LiteralPath $exe -Destination dist/GameTrail.exe -Force
+    Copy-Item -LiteralPath $exe -Destination dist -Force
 } finally {
     $resolved = (Resolve-Path -LiteralPath $build).Path
     if ((Split-Path $resolved) -eq (Join-Path $root '.runtime')) { Remove-Item -LiteralPath $resolved -Recurse -Force }

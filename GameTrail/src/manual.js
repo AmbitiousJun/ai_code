@@ -144,15 +144,26 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
         } else {
           const frame = resolveFrame(page, step.route, lang);
           if (frame) {
-            const result = await frame.evaluate(s => window.__gtManual?.invoke(s), step);
+            const result = await frame.evaluate(s => window.__gtManual?.invoke(s,true), step);
             if (result && step.kind === "CocosTouch") {
               const canvas = frame.locator("canvas").nth(result.index);
               const options = {position:{x:result.x,y:result.y},timeout:Math.max(1,Math.min(500,until-Date.now()))};
+              let timedOut = false, receipt;
               try {
                 if (observed.hasTouch) await canvas.tap(options);
                 else await canvas.click(options);
-                ok = true;
-              } catch (err) { if (err.name !== "TimeoutError") throw err; }
+              } catch (err) {
+                if (err.name !== "TimeoutError") throw err;
+                timedOut = true;
+              } finally {
+                receipt = await frame.evaluate(() => window.__gtManual?.finishTouchReplay()).catch(()=>null);
+              }
+              ok = receipt?.ended || (!timedOut && (!receipt || receipt.started));
+              if (timedOut && receipt?.started && !receipt.ended)
+                throw Error("第 " + (i+1) + " 步目标节点仅收到按下事件 · " + step.name);
+              if (ok && receipt?.ended)
+                emit({kind:"action",message:"目标节点已收到释放事件 · " + step.name +
+                  (timedOut ? " · 浏览器点击等待超时" : "")});
             } else ok = !!result;
           }
         }
@@ -260,6 +271,15 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
       const hooks = {
         previewMain: true,
         async install(ctx, page) {
+          if (process.env.GAMETRAIL_TRACE_INPUT === "1") {
+            await ctx.exposeBinding("__gtInputTrace", ({frame}, entry) => {
+              if (recording && !prompt.view?.paused) {
+                emit({kind:"action", message:"录入诊断 · " + JSON.stringify({
+                  frame:frame === page.mainFrame() ? "main" : frame.name() || "child", ...entry
+                }).slice(0,2000)});
+              }
+            });
+          }
           await ctx.addInitScript(installManualActions);
 
           await ctx.exposeBinding("__gtReport", ({frame, page: source}, step) => {

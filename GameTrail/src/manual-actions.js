@@ -78,10 +78,35 @@ function installManualActions() {
     });
   }
   let touchStep, ambiguousTouch, bindingError;
-  function targetBox(node, canvas) {
+  function uiTransformBox(node, canvas, trace) {
+    const cc = window.cc;
+    const ui = node._uiProps?.uiTransformComp || node.getComponent?.(cc.UITransform || "cc.UITransform");
+    const camera = cc.director?.root?.batcher2D?.getFirstRenderCamera?.(node);
+    const size = ui?.contentSize, anchor = ui?.anchorPoint;
+    trace?.({stage:"UITransform",name:node.name,component:!!ui,camera:!!camera,
+      width:size?.width,height:size?.height,anchor:anchor && [anchor.x,anchor.y]});
+    if (!size || !anchor || !ui.convertToWorldSpaceAR || !camera?.worldToScreen ||
+        !cc.Vec3 || !(size.width > 0 && size.height > 0)) return;
+    // Project the node's own rectangle. The world bounding box also includes children.
+    const points = [];
+    for (const u of [0,1]) for (const v of [0,1]) {
+      const local = new cc.Vec3((u-anchor.x)*size.width,(v-anchor.y)*size.height,0);
+      const screen = camera.worldToScreen(new cc.Vec3(),ui.convertToWorldSpaceAR(local));
+      points.push({x:screen.x/canvas.width,y:1-screen.y/canvas.height});
+    }
+    const xs = points.map(p=>p.x), ys = points.map(p=>p.y);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    const width = Math.max(...xs)-x, height = Math.max(...ys)-y;
+    trace?.({stage:"projected",source:"UITransform",name:node.name,x,y,width,height});
+    if (width > 0 && height > 0 && width*height < 0.8) return {x,y,width,height};
+  }
+  function targetBox(node, canvas, trace) {
     const cc = window.cc, view = cc?.view;
     if (!canvas || !node?.activeInHierarchy || node.opacity === 0 || view?._isRotated) return;
     const vp = view?.getViewportRect?.(), box = node.getBoundingBoxToWorld?.();
+    if (!box && canvas.width && canvas.height) return uiTransformBox(node,canvas,trace);
+    if (trace) trace({stage:"geometry",viewport:vp && {x:vp.x,y:vp.y,width:vp.width,height:vp.height},
+      world:box && {x:box.x,y:box.y,width:box.width,height:box.height},canvas:[canvas.width,canvas.height]});
     if (!vp || !box || !canvas.width || !canvas.height) return;
     const camera = cc.Camera?.findCamera?.(node);
     function project(x,y) {
@@ -92,28 +117,48 @@ function installManualActions() {
     }
     const a = project(box.x, box.y+box.height), b = project(box.x+box.width, box.y);
     const width = b.x-a.x, height = b.y-a.y;
+    trace?.({stage:"projected",x:a.x,y:a.y,width,height});
     if (width > 0 && height > 0 && width*height < 0.8) return {...a,width,height};
   }
   function canvasForGame() { return window.cc?.game?.canvas || document.querySelector("#GameCanvas,canvas"); }
   function armTouch(e) {
     const proto = window.cc?.Node?.prototype, canvas = canvasForGame();
-    if (!proto || e.target !== canvas || typeof proto.dispatchEvent !== "function") return;
+    const trace = window.__gtInputTrace;
+    trace?.({stage:"pointerdown",type:e.pointerType,element:e.target?.tagName,
+      gameCanvas:e.target===canvas,scene:!!scene(),dispatch:typeof proto?.dispatchEvent,
+      x:e.clientX,y:e.clientY});
+    if (finishTouchReplay || !proto || e.target !== canvas || typeof proto.dispatchEvent !== "function") return;
     const r = canvas.getBoundingClientRect();
     const pointer = {x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
     // Wrap only for this gesture. Capture before game handlers can move or destroy the node.
     const original = proto.dispatchEvent;
+    let traced = 0;
+    let touchStartNode, mouseDownNode, completedTouchNode;
     const dispatch = function(event) {
-      if (gesture && /^(touch(start|end)|mouse(down|up))$/i.test(event?.type)) {
+      if (trace && traced++ < 32) trace({stage:"dispatch",type:event?.type,name:this.name});
+      if (gesture && /^(touch-?(start|end)|mouse-?(down|up))$/i.test(event?.type)) {
         try {
-          const path = pathOf(this), box = targetBox(this,canvas);
+          const path = pathOf(this), box = targetBox(this,canvas,trace);
+          if (trace) trace({stage:"locate",name:this.name,path:path || null,box:box || null,pointer,
+            active:!!this.activeInHierarchy,opacity:this.opacity,rotated:!!window.cc?.view?._isRotated});
           if (box && path?.length) {
             const x = (pointer.x-box.x)/box.width, y = (pointer.y-box.y)/box.height;
             if (x>=0 && x<=1 && y>=0 && y<=1) {
-              if (touchStep && JSON.stringify(path)!==JSON.stringify(touchStep.path)) ambiguousTouch=true;
-              touchStep = {kind:"CocosTouch",name:this.name,path,x,y};
+              const type = event.type.toLowerCase().replace("-","");
+              if (type === "touchstart") touchStartNode = this;
+              if (type === "mousedown") mouseDownNode = this;
+              if (type === "touchend" && this === touchStartNode) completedTouchNode = this;
+              // Opening a panel can retarget the trailing mouse-up after the
+              // same button already received both presses and the touch-end.
+              const trailingRelease = type === "mouseup" && completedTouchNode &&
+                completedTouchNode === mouseDownNode && this !== completedTouchNode;
+              if (!trailingRelease) {
+                if (touchStep && JSON.stringify(path)!==JSON.stringify(touchStep.path)) ambiguousTouch=true;
+                touchStep = {kind:"CocosTouch",name:this.name,path,x,y};
+              }
             }
           }
-        } catch { /* Unknown engine projection: preserve normal input. */ }
+        } catch (error) { trace?.({stage:"projectionError",error:String(error)}); }
       }
       return original.apply(this,arguments);
     };
@@ -148,6 +193,13 @@ function installManualActions() {
   }
   window.addEventListener("pointerdown", start, true);
   window.addEventListener("pointerup", end, true);
+  if (window.__gtInputTrace) {
+    for (const type of ["pointerup","pointercancel","touchstart","touchend","mousedown","mouseup","click"]) {
+      window.addEventListener(type,e=>{
+        if (e.isTrusted) window.__gtInputTrace({stage:"browser",type,element:e.target?.tagName});
+      },{capture:true,passive:true});
+    }
+  }
   window.addEventListener("click", e => {
     if (!e.isTrusted || !window.__gtReport || (gesture && cocosAction) || e.target instanceof HTMLCanvasElement) return;
     const el = e.composedPath().find(n => n instanceof HTMLElement &&
@@ -173,7 +225,28 @@ function installManualActions() {
   window.addEventListener("change", e => {
     if (e.isTrusted && window.__gtReport) report({error:"暂不支持录入表单值变化"});
   }, true);
-  function invoke(step) {
+  let finishTouchReplay;
+  function watchTouchReplay(node) {
+    finishTouchReplay?.();
+    const proto = window.cc?.Node?.prototype;
+    if (typeof proto?.dispatchEvent !== "function") return;
+    const original = proto.dispatchEvent;
+    const receipt = {started:false,ended:false};
+    function dispatch(event) {
+      if (this === node) {
+        if (/^(touch-?start|mouse-?down)$/i.test(event?.type)) receipt.started = true;
+        if (/^(touch-?end|mouse-?up)$/i.test(event?.type)) receipt.ended = true;
+      }
+      return original.apply(this,arguments);
+    }
+    proto.dispatchEvent = dispatch;
+    finishTouchReplay = () => {
+      if (proto.dispatchEvent === dispatch) proto.dispatchEvent = original;
+      finishTouchReplay = undefined;
+      return receipt;
+    };
+  }
+  function invoke(step, observeTouch = false) {
     if (step.kind === "DOMAction") {
       const matches = document.querySelectorAll(step.selector);
       const el = matches[0];
@@ -195,6 +268,7 @@ function installManualActions() {
       const r = canvas.getBoundingClientRect();
       const x = (box.x+box.width*step.x)*r.width, y = (box.y+box.height*step.y)*r.height;
       if (document.elementFromPoint(r.left+x,r.top+y) !== canvas) return false;
+      if (observeTouch) watchTouchReplay(node);
       return {index:Array.from(document.querySelectorAll("canvas")).indexOf(canvas),x,y};
     }
     const matches = bindings(node).filter(h => bindingId(h) === step.key);
@@ -256,7 +330,8 @@ function installManualActions() {
     return true;
   }
   Object.defineProperty(window, "__gtManual", { value: {
-    invoke, watchPixelTouch, finishPixelTouch:() => finishPixelTouch?.()
+    invoke, watchPixelTouch, finishPixelTouch:() => finishPixelTouch?.(),
+    finishTouchReplay:() => finishTouchReplay?.()
   } });
 }
 module.exports = { installManualActions };
