@@ -81,13 +81,23 @@ async function rememberCanvas(page,template,lang) {
     }
   }
 }
+function pixelThreshold(initial, elapsedMs) {
+  const intervals = Math.floor(elapsedMs / 10000);
+  let minimum = initial;
+  for (let i = 0; i < intervals && minimum > 1; i++) {
+    const drop = Math.min(3, 1 + Math.floor(i / 2));
+    minimum = Math.max(1, minimum - drop);
+  }
+  return minimum;
+}
 async function replay(page, path, signal, emit, observed, lang, cfg = defaults, shot) {
   const seen = new Set();
   const stop = watchFrames(page, lang, url => seen.add(url));
   try {
     for (const [i, step] of path.steps.entries()) {
       const started = Date.now();
-      let threshold = cfg.pixelSimilarity ?? defaults.pixelSimilarity, previousCount;
+      const initialThreshold = cfg.pixelSimilarity ?? defaults.pixelSimilarity;
+      let threshold = initialThreshold, previousCount;
       const until = started + (step.pixels ? cfg.pixelTimeout ?? defaults.pixelTimeout : 15) * 1000;
       const scanSignal = step.pixels && AbortSignal.any([signal, AbortSignal.timeout(until - started)]);
       let retriedMask = false, ok = false, lastScan, maxCount = 0;
@@ -96,7 +106,7 @@ async function replay(page, path, signal, emit, observed, lang, cfg = defaults, 
         signal.throwIfAborted();
         if (step.pixels) {
           const timeout = Math.max(1, Math.min(3000, until - Date.now()));
-          const minimum = Math.max(1, (cfg.pixelSimilarity ?? defaults.pixelSimilarity) - Math.floor((Date.now() - started) / 10000));
+          const minimum = pixelThreshold(initialThreshold, Date.now() - started);
           const game = step.pixels.game;
           const frame = game && resolveFrame(page,game.route,lang);
           const canvas = frame?.locator("canvas").nth(game.index);
@@ -424,4 +434,4 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
   }
   return { clicks:0, replayedPaths, frames, uniqueGET:urls.size };
 }
-module.exports = { runManual, ManualPrompt, replay };
+module.exports = { runManual, ManualPrompt, replay, pixelThreshold };

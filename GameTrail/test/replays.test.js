@@ -8,8 +8,18 @@ const os = require("node:os");
 const path = require("node:path");
 const {setTimeout: delay} = require("node:timers/promises");
 const {PNG, jpegjs} = require("playwright-core/lib/utilsBundle");
-const {replay} = require("../src/manual");
+const {replay, pixelThreshold} = require("../src/manual");
 const {ReplayStore} = require("../src/replay-store");
+
+test("截图降幅每两轮递增，单轮最多降三个百分点", () => {
+  const expected = [94, 93, 92, 90, 88, 85, 82, 79, 76, 73, 70, 67];
+  for (const [interval, minimum] of expected.entries()) {
+    assert.equal(pixelThreshold(94, interval * 10000), minimum);
+    assert.equal(pixelThreshold(94, interval * 10000 + 9999), minimum);
+  }
+  assert.equal(pixelThreshold(4, 30000), 1);
+  assert.equal(pixelThreshold(4, 119999), 1);
+});
 
 test("降阈值后唯一目标点击，两个目标继续等待，三个目标快速失败", async t => {
   const rgb = Buffer.alloc(1200);

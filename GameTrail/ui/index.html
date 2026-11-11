@@ -54,7 +54,7 @@
           ><label
             >框选步骤等待超时（秒）<input id="pixelTimeout" type="number" min="1" max="120" required /></label
           ><label
-            >截图初始最低相似度（%，每 10 秒降 1 个百分点）<input id="pixelSimilarity" type="number" min="1" max="100" required /></label
+            >截图初始最低相似度（%，每 10 秒依次降 1、1、2、2 个百分点，此后每次降 3 个百分点）<input id="pixelSimilarity" type="number" min="1" max="100" required /></label
           ><label
             >每环境最多尝试的函数数 / 按钮路径深度<input
               id="actions"
