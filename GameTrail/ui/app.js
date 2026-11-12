@@ -310,6 +310,7 @@ function updatePreview(job) {
       if (!card) {
         const el = create("figure"), caption = create("figcaption", "#" + instance.run + " · " + instance.title);
         const frame = create("div", "等待窗口画面…");
+        caption.title = caption.textContent;
         el.append(caption,frame);
         $("screens").append(el);
         card = {el,caption,frame,controller:new AbortController(),next:0};

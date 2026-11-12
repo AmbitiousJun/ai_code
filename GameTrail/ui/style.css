@@ -306,7 +306,10 @@ main > section { min-width:0; }
 #preview { margin-bottom: 20px; }
 #screens { display:flex; gap:12px; overflow-x:auto; padding:8px 0; }
 #screens figure { flex:0 0 min(100%, 400px); min-width:0; margin:0; }
-#screens figcaption { font-weight:600; overflow-wrap:anywhere; }
+#screens figcaption {
+  font-weight:600; line-height:1.5; height:3em; overflow-wrap:anywhere;
+  display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden;
+}
 #screens figure div { display:grid; place-items:center; height:clamp(140px, 30vh, 240px); background:var(--soft); border-radius:8px; overflow:hidden; }
 #screens img { width:100%; height:100%; min-height:0; object-fit:contain; }
 #reportTools:not([hidden]), .historyRow { display: flex; align-items: center; gap: 8px; }
