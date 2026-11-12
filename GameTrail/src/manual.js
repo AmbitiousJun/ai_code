@@ -227,15 +227,15 @@ class ManualPrompt {
     this.update(this.view);
     return clear;
   }
-  ask(view, allowed) {
-    this.signal.throwIfAborted();
+  ask(view, allowed, signal = this.signal) {
+    signal.throwIfAborted();
     return new Promise((resolve, reject) => {
       const abort = () => { clear(); reject(Error("已取消")); };
       const clear = this.offer(view, allowed, cmd => {
-        this.signal.removeEventListener("abort", abort);
+        signal.removeEventListener("abort", abort);
         resolve(cmd);
       });
-      this.signal.addEventListener("abort", abort, { once: true });
+      signal.addEventListener("abort", abort, { once: true });
     });
   }
 }
@@ -279,6 +279,7 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
         });
       }
       const hooks = {
+        retryEntry: testing,
         previewMain: true,
         async install(ctx, page) {
           if (process.env.GAMETRAIL_TRACE_INPUT === "1") {
@@ -325,19 +326,19 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
             }
           });
         },
-        async interact(page, observed) {
+        async interact(page, observed, attempt) {
           let prefix;
           if (testing) {
             try {
-              await replay(page, path, runSignal, emit, observed, lang, cfg, shot);
-              runSignal.throwIfAborted();
+              await replay(page, path, attempt, emit, observed, lang, cfg, shot);
+              attempt.throwIfAborted();
               prefix = path;
               replayedPaths++;
               if (action === "verify") library.push(path);
               note = "入口试播通过 · " + path.steps.length + " 个动作，" + path.frames.length + " 个子页面地址" + (path.skipped ? "，录入时跳过 " + path.skipped + " 步" : "");
               emit({kind:"action",message:note});
             } catch (err) {
-              runSignal.throwIfAborted();
+              attempt.throwIfAborted();
               note = "入口试播失败 · " + err.message.split("\n")[0];
               emit({kind:"warning",message:note});
             }
@@ -346,7 +347,7 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
           if (action === "open" || prefix) options.unshift("record");
           if (testing) options.push("rerecord", "reset");
           if (library.length) options.push("trial");
-          const cmd = await prompt.ask({note, paths:list()}, options);
+          const cmd = await prompt.ask({note, paths:list()}, options, attempt);
           if (cmd.action === "rerecord") {
             rerecord();
             return;
@@ -369,7 +370,7 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
           prompt.recordPixels = async template => {
             if (draft.steps.length >= 100) throw Error("单条路径最多 100 个动作");
             if (template.side === 32) await rememberCanvas(page,template,lang);
-            const point = await locatePixels(page, template, cfg.pixelSimilarity, 3000, runSignal);
+            const point = await locatePixels(page, template, cfg.pixelSimilarity, 3000, attempt);
             if (!point) throw Error("无法唯一匹配选区，请框入更有辨识度的完整图案");
             const wasPaused = prompt.view.paused;
             prompt.view.paused = false;
@@ -378,7 +379,7 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
             draft.steps.push({kind:"PixelButton", name:"框选按钮 " + (pixelIndex+1), route:[], pixels:template});
             try {
               await clickPoint(page, point, prompt.hasTouch);
-              await delay(250, undefined, {signal});
+              await delay(250, undefined, {signal:attempt});
               const step = draft.steps[pixelIndex];
               prompt.view.note = "已录入 · " + step.name + (step.kind === "PixelButton" ? "（像素匹配）" : "（按截图重放）");
               emit({kind:"action",message:prompt.view.note});
@@ -389,8 +390,8 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
             } finally { pixelIndex = -1; }
           };
           try {
-            const decision = await prompt.ask({session:cmd.token, note:"正在录制当前预览页面", paths:list()}, ["finish","discard"]);
-            await delay(200, undefined, {signal});
+            const decision = await prompt.ask({session:cmd.token, note:"正在录制当前预览页面", paths:list()}, ["finish","discard"], attempt);
+            await delay(200, undefined, {signal:attempt});
             if (decision.action === "finish" && draft.steps.length > initialSteps) {
               action = "verify";
               return;
@@ -409,7 +410,11 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
         await launch(hooks, runSignal);
       } catch (err) {
         signal.throwIfAborted();
-        if (!restart.signal.aborted) throw err;
+        if (err.code === "ENGINE_RESTART") {
+          action = "open";
+          draft = undefined;
+          note = "浏览器已重建，可以重新录入当前路径。已验证的路径已保留。";
+        } else if (!restart.signal.aborted) throw err;
       } finally {
         clearReplayControl?.();
       }
@@ -417,15 +422,20 @@ async function runManual(row, cfg, cache, signal, emit, library, shot, preview, 
   } else if (library.length) {
     for (let i = checkpoint?.pathIndex ?? 0; i < library.length; i++) {
       const path = library[i];
-      try {
-        emit({kind:"action",message:"批量重放路径 " + (i+1)});
-        await launch({install: ctx => ctx.addInitScript(installManualActions),
-          interact: (page, observed) => replay(page, path, signal, emit, observed, lang, cfg, shot)});
-        replayedPaths++;
-      } catch (err) {
-        signal.throwIfAborted();
-        emit({kind:"warning",message:"批量重放路径 " + (i+1) + " 失败 · " + err.message.split("\n")[0]});
-      }
+      emit({kind:"action",message:"批量重放路径 " + (i+1)});
+      let completed = false;
+      await launch({install: ctx => ctx.addInitScript(installManualActions),
+        interact: async (page, observed, attempt) => {
+          try {
+            await replay(page, path, attempt, emit, observed, lang, cfg, shot);
+            completed = true;
+          } catch (error) {
+            attempt.throwIfAborted();
+            completed = false;
+            emit({kind:"warning",message:"批量重放路径 " + (i+1) + " 失败 · " + error.message.split("\n")[0]});
+          }
+        }});
+      if (completed) replayedPaths++;
       signal.throwIfAborted();
       if (i + 1 < library.length) checkpoint?.advance(i + 1);
     }

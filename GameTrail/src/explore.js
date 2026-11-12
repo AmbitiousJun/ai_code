@@ -218,13 +218,26 @@ async function click(c) {
 // A slow parser-blocking script can postpone DOMContentLoaded indefinitely.
 async function loadEntry(page, observed, seconds, signal) {
   signal.throwIfAborted();
+  while (true) {
+    try {
+      await loadOnce(page, observed, seconds, signal);
+      return;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!observed.entryRetry || page.isClosed()) throw error;
+      observed.entryRetry(error);
+      await require("node:timers/promises").setTimeout(3000, undefined, {signal});
+    }
+  }
+}
+async function loadOnce(page, observed, seconds, signal) {
   const start = Date.now();
   const budget = seconds * 1000;
   const deadline = start + budget;
   observed.paths.clear();
   observed.active.clear();
   const response = await page.goto(observed.entry, {waitUntil:"commit", timeout:Math.min(45000, budget)});
-  if (!response || response.status() >= 400)
+  if (!response || !response.ok())
     throw Error("入口 HTTP " + (response?.status() || "无响应"));
   while (true) {
     signal.throwIfAborted();
@@ -317,10 +330,13 @@ async function explore(page, ctx, cfg, signal, emit, library, observed, phase) {
   if (cfg.exploreMode === "source")
     return require("./frame-functions").exploreFrameFunctions({ ctx, cfg, phase, signal, emit, library, reset, settle, observed, frameRoute });
   if (phase === "replay") {
-    for (const [i, { steps }] of library.entries()) {
+    const start = observed.progress.path;
+    for (let i = start; i < library.length; i++) {
+      observed.progress.path = i;
+      const {steps} = library[i];
       emit({ kind: "action", message: "重放路径 · " + names(steps) });
       try {
-        if (i) await reset();
+        if (i > start) await reset();
         await apply(steps);
         emit({ kind: "action", message: "重放成功 · " + names(steps) });
       } catch (err) {

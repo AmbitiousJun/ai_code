@@ -58,12 +58,12 @@ class ReplayStore {
       throw error;
     }
   }
-  restart(id, config, total) {
+  restart(id, config, total, groups) {
     this.db.exec("BEGIN");
     try {
       this.db.prepare("DELETE FROM replay_progress WHERE task=?").run(id);
-      this.db.prepare("UPDATE tasks SET config=?, total=?, rowIndex=0, pathIndex=0 WHERE id=?")
-        .run(JSON.stringify(config), total, id);
+      this.db.prepare("UPDATE tasks SET config=?, total=?, groups=coalesce(?,groups), rowIndex=0, pathIndex=0 WHERE id=?")
+        .run(JSON.stringify(config), total, groups ? JSON.stringify([...groups]) : null, id);
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -73,8 +73,8 @@ class ReplayStore {
   variables(id) {
     const row = this.db.prepare("SELECT config FROM tasks WHERE id=?").get(id);
     if (!row) throw Error("重放任务不存在");
-    const {template, variables, variableOrder, primaryVariable} = JSON.parse(row.config);
-    return {template, variables, variableOrder, primaryVariable:primaryVariable ?? (template.includes("{gameId}") ? "gameId" : "")};
+    const {template, variables, variableOrder, primaryVariable, explore, exploreMode} = JSON.parse(row.config);
+    return {template, variables, variableOrder, manual:explore && exploreMode === "manual", primaryVariable:primaryVariable ?? (template.includes("{gameId}") ? "gameId" : "")};
   }
   rename(id, name) {
     if (typeof name !== "string" || !name.trim() || name.trim().length > 120)

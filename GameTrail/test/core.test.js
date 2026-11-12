@@ -76,4 +76,6 @@ test("LFU、持久命中数、容量下调、手动清空和隐私约束", (t) =
   assert.equal(c.stats().bytes, 4);
   c.clear();
   assert.equal(c.stats().entries, 0);
+  c.resize(128 * 1024 ** 3);
+  assert.ok(c.put(key("large"), h, Buffer.alloc(17 * 1024 ** 2)));
 });

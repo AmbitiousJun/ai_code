@@ -18,6 +18,8 @@ const root =
       ? "Library/Application Support/GameTrail"
       : ".gametrail",
   );
+const themeFile = path.join(root, "theme.json");
+let theme = fs.existsSync(themeFile) ? JSON.parse(fs.readFileSync(themeFile, "utf8")) : "light";
 const reports = path.join(root, "reports"),
   settings = path.join(root, "settings.json");
 fs.mkdirSync(reports, { recursive: true });
@@ -51,7 +53,7 @@ let current = null,
 const {ReplayStore} = require("./replay-store");
 const replayStore = new ReplayStore(path.join(root, "replays.sqlite"));
 let replayRevision = 0;
-function start(cfg, saved, full = false) {
+function start(cfg, saved, full = false, rerecord = []) {
   delete cfg.labels;
   delete cfg.extraGets;
   if (current?.status === "running") throw Error("已有任务正在运行");
@@ -76,15 +78,26 @@ function start(cfg, saved, full = false) {
       .map(row => [identity(row), saved.groups.get(row.group)]));
     groups = new Map(planned.slice(firstReplay).map(row => [row.group, byEnvironment.get(identity(row)) ?? []]));
   }
+  if (!Array.isArray(rerecord)) throw Error("重录分组格式无效");
+  const selectedGroups = new Set(rerecord);
+  const recordings = planned.filter(row => row.phase === "record" && row.primary && selectedGroups.has(row.group));
+  if (selectedGroups.size && (!saved || !full || recordings.length !== selectedGroups.size))
+    throw Error("请选择本次全量重跑中的手动录入分组");
+  const replayTotal = rows.length;
+  if (recordings.length) {
+    groups = new Map(groups);
+    for (const row of recordings) groups.set(row.group, []);
+  }
+  const scheduled = recordings.concat(rows);
   const id = new Date().toISOString().replace(/[:.]/g, "-"),
     dir = path.join(reports, id);
   fs.mkdirSync(dir);
   if (!saved) fs.writeFileSync(settings, JSON.stringify(cfg, null, 2));
-  if (saved && full) replayStore.restart(saved.id, cfg, rows.length);
+  if (saved && full && !recordings.length) replayStore.restart(saved.id, cfg, replayTotal);
   current = {
     id,
     status: "running",
-    total: rows.length,
+    total: scheduled.length,
     done: 0,
     active: "",
     events: [],
@@ -124,7 +137,7 @@ function start(cfg, saved, full = false) {
   };
   (async () => {
     async function executeRow(i) {
-      const row = rows[i];
+      const row = scheduled[i];
       const run = i + 1,
         label = [Object.values(row.vars).join(" / "), row.device.name]
           .filter(Boolean)
@@ -192,7 +205,7 @@ function start(cfg, saved, full = false) {
       } catch (e) {
         // runManual handles individual replay failures. A checkpoint failure
         // must stop scheduling so the next attempt resumes at the saved path.
-        if (checkpoint && library.length && !signal.aborted) throw e;
+        if ((checkpoint || (saved && row.phase === "record")) && !signal.aborted) throw e;
         summary.status = signal.aborted ? "取消" : "失败";
         summary.error = e.message;
         emit({ kind: "warning", message: e.message.split("\n")[0] });
@@ -210,15 +223,19 @@ function start(cfg, saved, full = false) {
       job.done++;
     }
     // Recording and discovery must finish before dependent environments start.
-    for (let i = 0; i < rows.length && !signal.aborted;) {
-      const phase = rows[i].phase;
+    for (let i = 0; i < scheduled.length && !signal.aborted;) {
+      if (recordings.length && i === recordings.length) {
+        replayStore.restart(saved.id, cfg, replayTotal, groups);
+        replayRevision++;
+      }
+      const phase = scheduled[i].phase;
       if (phase !== "load" && phase !== "replay") {
         await executeRow(i++);
         continue;
       }
       let end = i + 1;
-      while (end < rows.length && rows[end].phase === phase &&
-        (phase !== "replay" || rows[end].batch === rows[i].batch)) end++;
+      while (end < scheduled.length && scheduled[end].phase === phase &&
+        (phase !== "replay" || scheduled[end].batch === scheduled[i].batch)) end++;
       const worker = async () => {
         try {
           while (!signal.aborted && i < end) await executeRow(i++);
@@ -339,7 +356,7 @@ const server = http.createServer(async (req, res) => {
           cfg.recordedVariables = task.config.variables;
           cfg.recordedVariableOrder = task.config.variableOrder;
         }
-        return json(start(cfg, task, data.mode === "all"));
+        return json(start(cfg, task, data.mode === "all", data.rerecord));
       }
       if (p === "/api/replays/rename" || p === "/api/replays/delete") {
         if (p.endsWith("/rename")) replayStore.rename(data.id, data.name);
@@ -400,6 +417,12 @@ const server = http.createServer(async (req, res) => {
           fs.rmSync(path.join(reports, id), { recursive: true });
         return json({ ok: true });
       }
+      if (p === "/api/theme") {
+        if (!["light","dark","system"].includes(data.theme)) throw Error("主题无效");
+        fs.writeFileSync(themeFile, JSON.stringify(data.theme));
+        theme = data.theme;
+        return json({theme});
+      }
       if (p === "/api/cache") {
         if (data.clear) cache.clear();
         else cache.resize(data.cap);
@@ -438,6 +461,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/config") {
       return json({
+        theme,
         version: require("../package.json").version,
         presets,
         settings: fs.existsSync(settings)
@@ -465,7 +489,7 @@ const server = http.createServer(async (req, res) => {
         : p.endsWith(".json")
           ? "application/json"
           : "application/x-ndjson";
-    } else if (["/", "/record.html", "/record.js", "/app.js", "/style.css"].includes(p)) {
+    } else if (["/", "/record.html", "/record.js", "/app.js", "/theme.js", "/style.css"].includes(p)) {
       file = path.join(
         __dirname,
         "../ui",

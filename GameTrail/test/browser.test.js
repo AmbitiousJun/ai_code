@@ -491,3 +491,27 @@ test("Windows WebKit 在 TLS 握手中发送含下划线的原始 SNI", {
     await browser.close();
   }
 });
+
+test("WebKit 回放先重试 503，在渲染线程卡死后重建当前环境", {timeout:90000}, async t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "gt-recovery-"));
+  const cache = new Cache(dir);
+  let entries = 0;
+  const site = http.createServer((req,res) => {
+    if (req.url !== "/") return res.end();
+    entries++;
+    res.writeHead(entries === 1 ? 503 : 200, {"content-type":"text/html"});
+    res.end(entries === 2 ? "<script>while(true){}</script>" : "<p>ready</p>");
+  });
+  await new Promise(resolve => site.listen(0,"127.0.0.1",resolve));
+  t.after(() => { site.close(); cache.db.close(); fs.rmSync(dir,{recursive:true,force:true}); });
+  const cfg = {...defaults,template:"http://127.0.0.1:"+site.address().port,
+    selected:["ios"], explore:false, waitSeconds:2, quietSeconds:0.1};
+  const events = [];
+  await runOne({...plan(cfg)[0], phase:"replay"},cfg,cache,new AbortController().signal,
+    e=>events.push(e.message),[],path.join(dir,"end.png"),null,{
+      async interact(page) { assert.equal(await page.locator("p").innerText({timeout:60000}),"ready"); }
+    });
+  assert.equal(entries,3);
+  assert.ok(events.some(m=>m?.includes("入口加载失败")));
+  assert.ok(events.some(m=>m?.includes("无响应")));
+});

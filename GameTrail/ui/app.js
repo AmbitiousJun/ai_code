@@ -4,6 +4,14 @@ const create = (tag, text) => {
   if (text !== undefined) el.textContent = text;
   return el;
 };
+function resourceLink(url) {
+  if (!/^https?:\/\//i.test(url)) return document.createTextNode(url || "");
+  const link = create("a", url);
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
+}
 async function api(route, data) {
   const r = await fetch(
     route,
@@ -131,18 +139,9 @@ function render() {
     tr.append(
       create("td", beijingTime.format(new Date(e.time))),
       s,
-      create(
-        "td",
-        "#" +
-          e.run +
-          " " +
-          (e.method || "") +
-          " " +
-          (e.url || "") +
-          " " +
-          (e.message || ""),
-      ),
+      create("td", "#" + e.run + " " + (e.method || "") + " "),
     );
+    tr.lastElementChild.append(resourceLink(e.url), " " + (e.message || ""));
     if (e.diagnostic) {
       const a = create("a"," 查看诊断图"); a.href = "/reports/"+currentId+"/"+e.diagnostic; a.target = "_blank"; tr.lastElementChild.append(a);
     }
@@ -212,8 +211,11 @@ async function report(id) {
   }
   const list = create("details");
   list.append(create("summary", "成功资源清单（" + j.resources.length + "）"));
-  for (const s of j.resources)
-    list.append(create("div", s.sources.join(", ") + " · " + s.url));
+  for (const s of j.resources) {
+    const item = create("div", s.sources.join(", ") + " · ");
+    item.append(resourceLink(s.url));
+    list.append(item);
+  }
   box.append(list);
 }
 function reportBoxes() {
@@ -370,6 +372,21 @@ async function editRerun(task) {
     ? "按 " + saved.primaryVariable + " 复用已录路径。"
     : "按原变量组合和机型复用已录路径。") + "没有对应路径的环境只加载入口。开始后将重置此任务的进度。";
   $("rerunError").textContent = "";
+  $("rerecord").hidden = !(saved.manual && saved.primaryVariable);
+  const choices = $("rerecordChoices");
+  choices.replaceChildren();
+  function renderGroups(input) {
+    const selected = new Set([...choices.querySelectorAll(":checked")].map(box => box.value));
+    choices.replaceChildren();
+    for (const value of new Set(input.value.split("\n").map(s => s.trim()).filter(Boolean))) {
+      const label = create("label"), box = create("input");
+      box.type = "checkbox";
+      box.value = value;
+      box.checked = selected.has(value);
+      label.append(box, " " + value);
+      choices.append(label);
+    }
+  }
   const keys = new Set([...saved.template.matchAll(/\{([\w-]+)\}/g)].map(match => match[1]));
   for (const key of new Set([...(saved.variableOrder ?? Object.keys(saved.variables)), ...keys])) {
     if (!keys.has(key)) continue;
@@ -380,6 +397,10 @@ async function editRerun(task) {
     input.value = saved.variables[key].join("\n");
     label.append(create("small", "每行一个值"), input);
     fields.append(label);
+    if (saved.manual && key === saved.primaryVariable) {
+      renderGroups(input);
+      input.oninput = () => renderGroups(input);
+    }
   }
   $("rerunCancel").onclick = () => dialog.close();
   $("rerunForm").onsubmit = async event => {
@@ -391,7 +412,7 @@ async function editRerun(task) {
     }
     $("rerunStart").disabled = true;
     try {
-      await api("/api/replays/start", {id:task.id, mode:"all", variables, replayConcurrency:replayConcurrency()});
+      await api("/api/replays/start", {id:task.id, mode:"all", variables, rerecord:[...choices.querySelectorAll(":checked")].map(box => box.value), replayConcurrency:replayConcurrency()});
       replayViewKey = "";
       dialog.close();
     } catch (e) {
@@ -563,6 +584,7 @@ function themedSelect(select) {
     menu.append(item);
   }
   select.addEventListener("change", sync);
+  select.addEventListener("input", sync);
   sync();
   trigger.onclick = () => menu.hidden ? open() : close();
   wrap.onkeydown = e => {
@@ -584,6 +606,14 @@ function themedSelect(select) {
 
 async function init() {
   const data = await api("/api/config");
+  applyTheme(data.theme);
+  $("theme").value = data.theme;
+  $("theme").onchange = async () => {
+    const theme = $("theme").value;
+    applyTheme(theme);
+    localStorage.setItem("gametrail-theme",theme);
+    try { await api("/api/theme",{theme}); } catch (error) { show(error); }
+  };
   $("version").textContent = "v" + data.version;
   $("history").onchange = updateSelection;
   $("selectAll").onchange = () => {

@@ -5,10 +5,12 @@
     content="width=device-width,initial-scale=1"
   /><title>GameTrail · 游戏资源预热</title
   ><link rel="stylesheet" href="/style.css" />
+  <script src="/theme.js"></script>
   <header>
     <div class="brand"><b>↗</b> GameTrail <small id="version"></small></div>
     <span>本地资源预热工作台</span>
-    <button class="secondary" id="quit" style="margin-left: auto">
+    <select id="theme" aria-label="界面主题"><option value="light">浅色</option><option value="dark">深色</option><option value="system">适应系统</option></select>
+    <button class="secondary" id="quit">
       退出程序
     </button>
   </header>
@@ -87,7 +89,6 @@
           aria-label="缓存容量 GiB"
           type="number"
           min="0"
-          max="100"
           step="any"
         /><span>GiB</span><button class="secondary" id="save">保存</button
         ><button class="secondary" id="clear">清空</button>
@@ -159,6 +160,7 @@
           <p id="rerunName"></p>
           <p id="rerunHint"></p>
           <div id="rerunFields"></div>
+          <fieldset id="rerecord" hidden><legend>重新录入特殊路径的分组</legend><small>勾选的分组会从入口重新录入。录入完毕后替换这些分组的旧路径。</small><div id="rerecordChoices"></div></fieldset>
           <p id="rerunError" role="alert"></p>
           <button type="button" id="rerunCancel" class="secondary">取消</button>
           <button type="submit" id="rerunStart">保存并从头重跑</button>

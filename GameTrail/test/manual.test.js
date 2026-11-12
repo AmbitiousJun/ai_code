@@ -54,10 +54,12 @@ test("手动任务先录完两组，多路径从独立入口试播，无标识�
   assert.deepEqual(rows.map(r=>r.phase),["record","record","replay","replay","replay","replay"]);
   let browser, capture, previewPage;
   const headless = [];
-  const launch = chromium.launch.bind(chromium);
-  t.mock.method(chromium,"launch",async opts => {
+  const launch = chromium.launchServer.bind(chromium);
+  const connect = chromium.connect.bind(chromium);
+  t.mock.method(chromium,"connect",async (...args) => browser = await connect(...args));
+  t.mock.method(chromium,"launchServer",async opts => {
     headless.push(opts.headless);
-    return browser = await launch(opts);
+    return launch(opts);
   });
   const signal = new AbortController().signal;
   const groups = new Map(), events = [];

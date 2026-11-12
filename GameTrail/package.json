@@ -1,6 +1,6 @@
 {
   "name": "gametrail",
-  "version": "0.6.16",
+  "version": "0.6.17",
   "main": "src/server.js",
   "directories": {
     "test": "test"

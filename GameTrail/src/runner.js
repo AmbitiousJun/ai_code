@@ -64,6 +64,25 @@ function muteWebKit() {
 }
 const {capturingMatchFrame} = require("./preview");
 async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewReady, manual) {
+  const progress = {path:0};
+  const initialPaths = library.length;
+  while (true) {
+    signal.throwIfAborted();
+    const recovery = new AbortController();
+    const attempt = AbortSignal.any([signal, recovery.signal]);
+    try {
+      return await runAttempt(row, cfg, cache, attempt, emit, library, shot, onPreviewReady, manual, recovery, progress);
+    } catch (error) {
+      signal.throwIfAborted();
+      if (!recovery.signal.aborted) throw error;
+      emit({kind:"warning", message:recovery.signal.reason.message + "，3 秒后从入口重建实例"});
+      await require("node:timers/promises").setTimeout(3000, undefined, {signal});
+      if (row.phase === "record") throw recovery.signal.reason;
+      if (row.phase === "discover") library.length = initialPaths;
+    }
+  }
+}
+async function runAttempt(row, cfg, cache, signal, emit, library, shot, onPreviewReady, manual, recovery, progress) {
   const { device: d } = row;
   const opts = { headless: true };
   if (d.engine === "chromium") {
@@ -72,11 +91,31 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
   }
   const browserType = process.platform === "win32" && d.engine === "webkit"
     ? require("webkit-win").webkit : pw[d.engine];
-  const browser = await browserType.launch(opts);
-  const stop = () => browser.close().catch(() => {});
+  const server = await browserType.launchServer({...opts, host:"127.0.0.1"});
+  let browser, monitor, closing = false;
+  let killed;
+  const stop = () => killed ??= server.kill().catch(() => {});
   signal.addEventListener("abort", stop, { once: true });
   let audioGuard, ctx;
   try {
+    signal.throwIfAborted();
+    let page, lastReply = Date.now(), probing = false;
+    const recover = message => {
+      if (!closing && !signal.aborted) recovery.abort(Object.assign(Error(message), {code:"ENGINE_RESTART"}));
+    };
+    server.once("close", () => recover("浏览器进程已退出"));
+    monitor = setInterval(async () => {
+      if (Date.now() - lastReply >= 30000) return recover("浏览器连续 30 秒无响应");
+      if (probing || !page || closing) return;
+      probing = true;
+      try {
+        await Promise.all(ctx.pages().flatMap(p => p.frames().map(f => f.evaluate(() => 1))));
+        lastReply = Date.now();
+      } catch { /* Navigation can replace a frame while probing. */ }
+      finally { probing = false; }
+    }, 3000);
+    browser = await browserType.connect(server.wsEndpoint(), {timeout:30000});
+    browser.once("disconnected", () => recover("浏览器连接已断开"));
     signal.throwIfAborted();
     if (process.platform === "win32" && d.engine === "webkit") {
       const executable = path.resolve(__dirname, "../native/windows-webkit/audio-mute.exe");
@@ -113,7 +152,13 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
         return register.call(this, type, listener, options);
       };
     });
-    const page = await ctx.newPage();
+    page = await ctx.newPage();
+    observed.progress = progress;
+    page.once("crash", () => recover("游戏页面崩溃"));
+    page.once("close", () => recover("游戏页面意外关闭"));
+    if (row.phase === "replay" || manual?.retryEntry)
+      observed.entryRetry = error => emit({kind:"warning", url:row.url,
+        message:"入口加载失败，3 秒后重试 · " + error.message.split("\n")[0]});
     if (manual?.install) await manual.install(ctx, page);
     ctx.on("weberror", (e) =>
       emit({ kind: "warning", message: "页面脚本 · " + e.error().message }),
@@ -213,7 +258,7 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
               ? "响应限制缓存" : "缺少有效期或已过期";
             return decision("跳过缓存 · " + reason);
           }
-          const limit = Math.min(cache.cap, 16 * 1024 ** 2);
+          const limit = cache.cap;
           let size = Number(headers["content-length"]);
           if (!Number.isFinite(size)) {
             if (await r.finished()) return decision("跳过缓存 · 下载未完成");
@@ -251,17 +296,32 @@ async function runOne(row, cfg, cache, signal, emit, library, shot, onPreviewRea
       }
     }
     let clicks = 0;
-    if (manual) await manual.interact(page, observed);
-    else if (cfg.explore) clicks = await explore(page, ctx, cfg, signal, emit, library, observed, row.phase);
+    try {
+      if (manual) await manual.interact(page, observed, signal);
+      else if (cfg.explore) clicks = await explore(page, ctx, cfg, signal, emit, library, observed, row.phase);
+    } finally {
+      // A step timeout can precede the watchdog. Verify renderer liveness before committing it.
+      if (!signal.aborted) await Promise.all(ctx.pages().flatMap(p =>
+        p.frames().map(f => f.evaluate(() => 1).catch(() => {}))));
+    }
     if (!signal.aborted)
       await page.screenshot({ path: shot, timeout: 4000 }).catch(() => {});
     await Promise.race([Promise.allSettled([...pending]), sleep(1500)]);
     signal.throwIfAborted();
     return { clicks, frames: observed.frames, uniqueGET: seen.size };
   } finally {
-    signal.removeEventListener("abort", stop);
-    await ctx?.close().catch(() => {});
-    await browser.close().catch(() => {});
+    closing = true;
+    clearInterval(monitor);
+    const force = setTimeout(stop, 5000);
+    try {
+      if (signal.aborted) await stop();
+      await ctx?.close().catch(() => {});
+      await browser?.close().catch(() => {});
+      await server.close().catch(() => {});
+    } finally {
+      clearTimeout(force);
+      signal.removeEventListener("abort", stop);
+    }
     audioGuard?.kill();
     audioGuard = null;
   }

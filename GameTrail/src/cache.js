@@ -43,8 +43,8 @@ class Cache {
     }
   }
   resize(cap) {
-    if (!Number.isSafeInteger(cap) || cap < 0 || cap > 100 * 1024 ** 3)
-      throw Error("缓存范围 0–100 GiB");
+    if (!Number.isSafeInteger(cap) || cap < 0)
+      throw Error("容量必须为非负的安全整数字节数");
     this.cap = cap;
     this.db.prepare("UPDATE prefs SET cap=?").run(cap);
     this.trim();
@@ -109,7 +109,7 @@ class Cache {
       !ttl ||
       !this.cap ||
       !body.length ||
-      body.length > Math.min(this.cap, 16 * 1024 ** 2) ||
+      body.length > this.cap ||
       this.db.prepare("SELECT 1 FROM items WHERE k=?").get(k)
     )
       return false;

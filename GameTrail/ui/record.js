@@ -1,3 +1,4 @@
+fetch("/api/config").then(r => r.json()).then(data => applyTheme(data.theme)).catch(() => {});
 const game = document.querySelector("#game"), statusText = document.querySelector("#status");
 const finish = document.querySelector("#finish"), discard = document.querySelector("#discard");
 const session = location.hash.slice(1);

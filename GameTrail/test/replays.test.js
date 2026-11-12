@@ -69,7 +69,11 @@ test("保存任务支持区分名称、重命名及批量删除，运行中的�
 
 test("工作台保存录入结果，中断后续跑，全量重跑按语言分批并复用游戏路径", {timeout:150000}, async t => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(),"gt-replay-"));
-  const site = http.createServer((req,res) => res.end('<button id="go" style="position:fixed;inset:0;width:100%;height:100%">Go</button>'));
+  let offline = false;
+  const site = http.createServer((req,res) => {
+    res.statusCode = offline ? 503 : 200;
+    res.end('<button id="go" style="position:fixed;inset:0;width:100%;height:100%">Go</button>');
+  });
   await new Promise(resolve => site.listen(0,"127.0.0.1",resolve));
   let child, base;
   async function boot() {
@@ -152,6 +156,23 @@ test("工作台保存录入结果，中断后续跑，全量重跑按语言分�
     assert.equal(updated.rowIndex,job.runs.length);
     assert.equal(updated.total,job.runs.length);
   }
+  await api("replays/start",{id:saved.id,mode:"all",rerecord:["extra"]});
+  await recordStep();
+  await command("done");
+  const rebuilt = await until(j=>j.status !== "running",60000);
+  assert.equal(rebuilt.status,"complete");
+  assert.deepEqual(rebuilt.runs.filter(r=>r.phase === "重放路径").map(r=>r.replayedPaths),[2,1,2,1]);
+  assert.equal((await api("replays"))[0].rowIndex,4);
+  offline = true;
+  await api("replays/start",{id:saved.id,mode:"all",replayConcurrency:1});
+  await until(j=>j.events.filter(e=>e.message?.includes("入口加载失败")).length >= 2);
+  await api("stop",{});
+  await until(j=>j.status === "cancelled");
+  const [paused] = await api("replays");
+  assert.deepEqual([paused.rowIndex, paused.pathIndex],[0,0]);
+  offline = false;
+  await api("replays/start",{id:saved.id,mode:"continue"});
+  assert.equal((await until(j=>j.status !== "running",60000)).status,"complete");
 });
 
 test("并发环境乱序完成时保留各自的断点，全量重跑清空所有断点", () => {

@@ -122,9 +122,12 @@ async function exploreFrameFunctions({ ctx, cfg, phase, signal, emit, library, r
   const replay = phase === "replay";
   const steps = replay ? library.map(p => p.steps[0]) : candidates.slice(0, cfg.actions).map(c => c.step);
   if (!steps.length) emit({ kind: "action", message: replay ? "没有已验证的 iframe 函数可重放" : "未找到可直接调用的 iframe 函数" });
-  for (const [i, step] of steps.entries()) {
+  const start = replay ? observed.progress.path : 0;
+  for (let i = start; i < steps.length; i++) {
+    if (replay) observed.progress.path = i;
+    const step = steps[i];
     signal.throwIfAborted();
-    if (i) {
+    if (i > start) {
       await reset();
       candidates = await scan();
     }

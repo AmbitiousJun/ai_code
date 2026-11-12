@@ -34,6 +34,14 @@ test("关闭探索时，工作台按默认和自定义并发数加载资源并�
   const page = await browser.newPage();
   await page.goto(base);
   await page.locator("#devices input[value=win]").waitFor();
+  await page.locator("#theme-trigger").click();
+  await page.getByRole("option",{name:"适应系统"}).click();
+  await page.emulateMedia({colorScheme:"dark"});
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  await page.reload();
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "dark");
+  await page.emulateMedia({colorScheme:"light"});
+  await page.waitForFunction(() => document.documentElement.dataset.theme === "light");
   await page.locator("#explore").uncheck();
   await page.locator("#template").fill("http://127.0.0.1:" + site.address().port + "/{gameId}");
   await page.locator("#variables").fill("gameId=a,b,c");
@@ -51,11 +59,19 @@ test("关闭探索时，工作台按默认和自定义并发数加载资源并�
     };
     page.on("response", sample);
     await page.locator("#start").click();
-    await page.waitForFunction(n => document.querySelectorAll("#screens img").length === n, expected);
+    try {
+      await page.waitForFunction(n => document.querySelectorAll("#screens img").length === n, expected);
+    } catch (err) {
+      const {job} = await (await fetch(base + "/api/state")).json();
+      throw Error(JSON.stringify({limit, status:job?.status, runs:job?.runs, err:await page.locator("#err").innerText()}), {cause:err});
+    }
     await page.waitForFunction(() => document.querySelector("#status").textContent === "已完成");
     const { job } = await (await fetch(base + "/api/state")).json();
     assert.equal(job.done, twoDevices ? 6 : 3);
     assert.ok(job.runs.every(row => row.phase === "加载资源" && row.status === "完成"));
+    const link = page.locator("#events a").first();
+    assert.equal(await link.getAttribute("target"), "_blank");
+    assert.ok((await link.getAttribute("href")).startsWith("http://127.0.0.1:"));
     page.off("response", sample);
     assert.equal(Math.max(...observed), expected);
   }
